@@ -4,12 +4,12 @@ WORKDIR /app
 
 COPY package*.json ./
 
-# Instalar dependências
-RUN npm install
+RUN npm ci --only=production
 
 # Remover bcrypt que não funciona e adicionar bcryptjs
 RUN npm uninstall bcrypt && \
-    npm install bcryptjs
+    npm install bcryptjs && \
+    mkdir -p /app/node_modules/bcrypt
 
 COPY . .
 
@@ -17,6 +17,4 @@ COPY . .
 RUN echo 'module.exports = require("bcryptjs");' > /app/node_modules/bcrypt.js && \
     echo '{ "name": "bcrypt", "main": "../bcrypt.js" }' > /app/node_modules/bcrypt/package.json
 
-EXPOSE 3000
-
-CMD ["npm", "start"] 
+CMD ["node", "src/server.js"] 

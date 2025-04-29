@@ -21,7 +21,8 @@ RUN npm ci --only=production
 
 # Remover bcrypt que não funciona e adicionar bcryptjs
 RUN npm uninstall bcrypt && \
-    npm install bcryptjs
+    npm install bcryptjs && \
+    mkdir -p /app/node_modules/bcrypt
 
 COPY . .
 
