@@ -1,0 +1,4 @@
+// Configurações dinâmicas de ambiente injetadas no runtime
+window.env = {
+  API_URL: "${VITE_API_URL}"
+}; 
