@@ -4,9 +4,6 @@ services:
   # Banco de dados MongoDB
   mongodb:
     image: mongo:latest
-    container_name: zapstorm-mongodb
-    ports:
-      - "27017:27017"
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped
@@ -16,10 +13,6 @@ services:
   # Serviço de mensageria RabbitMQ
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: zapstorm-rabbitmq
-    ports:
-      - "5672:5672"   # Porta principal para conexão
-      - "15672:15672" # Interface de administração
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     restart: unless-stopped
@@ -29,9 +22,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: zapstorm-api
-    ports:
-      - "3001:3001"
     restart: unless-stopped
     depends_on:
       - mongodb
@@ -50,7 +40,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
-    container_name: zapstorm-message-worker
     restart: unless-stopped
     depends_on:
       - mongodb
@@ -69,7 +58,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
-    container_name: zapstorm-scheduler-worker
     restart: unless-stopped
     depends_on:
       - mongodb
@@ -88,7 +76,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
-    container_name: zapstorm-alert-worker
     restart: unless-stopped
     depends_on:
       - mongodb
@@ -107,16 +94,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: zapstorm-frontend
-    ports:
-      - "8080:80"
     volumes:
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
     restart: unless-stopped
     depends_on:
       - api
     environment:
-      - VITE_API_URL=http://localhost:3001/api
+      - VITE_API_URL=http://api:3001/api
 
 volumes:
   mongodb_data:
