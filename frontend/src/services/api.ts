@@ -1,8 +1,28 @@
 import axios from 'axios';
 
+// Declaração para o objeto _env_ global
+declare global {
+  interface Window {
+    _env_?: {
+      VITE_API_URL?: string;
+    };
+  }
+}
+
+// Função para obter a URL da API do ambiente
+const getApiUrl = () => {
+  // Primeiro, tentar obter do objeto _env_ injetado em runtime
+  if (window._env_ && window._env_.VITE_API_URL) {
+    return window._env_.VITE_API_URL;
+  }
+  
+  // Caso contrário, usar a variável de ambiente do Vite ou o fallback
+  return import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+};
+
 // Configuração base do axios
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',
+  baseURL: getApiUrl(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
