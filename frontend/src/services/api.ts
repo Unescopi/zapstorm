@@ -33,20 +33,20 @@ const getApiUrl = () => {
 const apiUrl = getApiUrl();
 console.log('URL da API final:', apiUrl);
 
-// Configuração base do axios
+// Configuração base do axios usando caminhos relativos
 const api = axios.create({
-  baseURL: apiUrl,
+  // Usamos apenas o caminho relativo '/api' para todas as requisições
+  // O navegador automaticamente usa o host atual, resolvendo o problema
+  baseURL: '/api',
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Log das requisições
+// Interceptor para adicionar o token de autenticação
 api.interceptors.request.use(
   (config) => {
-    console.log(`Enviando requisição para: ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
-    
     const token = localStorage.getItem('@ZapStorm:token');
     if (token) {
       config.headers.common = config.headers.common || {};
@@ -55,23 +55,16 @@ api.interceptors.request.use(
     return config;
   },
   (error) => {
-    console.error('Erro na requisição:', error);
     return Promise.reject(error);
   }
 );
 
 // Interceptor para tratamento de erros
 api.interceptors.response.use(
-  (response) => {
-    console.log('Resposta recebida com sucesso:', response.status);
-    return response;
-  },
+  (response) => response,
   (error) => {
-    console.error('Erro na resposta:', error);
-    
     if (error.response && error.response.status === 401) {
       // Token expirado ou inválido
-      console.log('Token inválido ou expirado. Redirecionando para login...');
       localStorage.removeItem('@ZapStorm:token');
       localStorage.removeItem('@ZapStorm:user');
       window.location.href = '/login';

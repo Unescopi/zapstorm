@@ -12,9 +12,8 @@ RUN npm ci
 # Copiar código fonte
 COPY . .
 
-# Construir aplicação ignorando erros de tipagem
-RUN echo "Pulando verificação de tipos TypeScript" && \
-    npx vite build
+# Construir aplicação
+RUN npx vite build
 
 # Estágio de produção
 FROM nginx:alpine
@@ -22,12 +21,8 @@ FROM nginx:alpine
 # Copiar configuração do nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Criar diretório de assets
-RUN mkdir -p /usr/share/nginx/html/assets
-
-# Copiar scripts
+# Copiar script de entrypoint
 COPY --chmod=755 ./docker-entrypoint.sh /
-COPY --chmod=755 ./fix-api-url.sh /
 
 # Copiar arquivos construídos da etapa anterior
 COPY --from=build /app/dist /usr/share/nginx/html
