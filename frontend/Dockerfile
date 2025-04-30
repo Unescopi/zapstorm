@@ -25,8 +25,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Criar diretório de assets
 RUN mkdir -p /usr/share/nginx/html/assets
 
-# Copiar script para injetar variáveis de ambiente
+# Copiar scripts
 COPY --chmod=755 ./docker-entrypoint.sh /
+COPY --chmod=755 ./fix-api-url.sh /
 
 # Copiar arquivos construídos da etapa anterior
 COPY --from=build /app/dist /usr/share/nginx/html

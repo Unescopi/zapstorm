@@ -31,6 +31,10 @@ else
   echo "ERRO: Falha ao criar o arquivo env-config.js!"
 fi
 
+# Executar o script de correção de URLs hardcoded
+echo "Executando correção de URLs nos arquivos compilados..."
+/fix-api-url.sh
+
 # Executa o comando passado para o entrypoint
 echo "Iniciando o servidor NGINX..."
 exec "$@" 
