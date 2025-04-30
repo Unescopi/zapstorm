@@ -22,8 +22,10 @@ FROM nginx:alpine
 # Copiar configuração do nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Criar diretório de assets
+RUN mkdir -p /usr/share/nginx/html/assets
+
 # Copiar script para injetar variáveis de ambiente
-COPY --chmod=755 ./public/assets/env-config.js.template /usr/share/nginx/html/assets/
 COPY --chmod=755 ./docker-entrypoint.sh /
 
 # Copiar arquivos construídos da etapa anterior
