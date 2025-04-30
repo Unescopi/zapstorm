@@ -9,6 +9,9 @@ COPY package*.json ./
 # Instalar dependências
 RUN npm ci
 
+# Instalar terser explicitamente (necessário para minificação)
+RUN npm install -D terser
+
 # Copiar código fonte
 COPY . .
 
