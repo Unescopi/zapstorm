@@ -28,8 +28,14 @@ router.route('/')
   .get(contactController.getContacts)
   .post(contactController.createContact);
 
+// Rota para exportar contatos
+router.get('/export', contactController.exportCSV);
+
 // Rota para importação em massa de contatos via CSV
 router.post('/import', upload.single('file'), contactController.importCSV);
+
+// Rota para excluir múltiplos contatos
+router.post('/delete-multiple', contactController.deleteMultipleContacts);
 
 // Rota para obter todas as tags distintas
 router.get('/tags', contactController.getTags);

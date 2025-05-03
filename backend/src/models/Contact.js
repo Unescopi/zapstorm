@@ -43,7 +43,8 @@ contactSchema.pre('save', function(next) {
 // Middleware para normalizar número de telefone (remover espaços, traços, etc)
 contactSchema.pre('save', function(next) {
   if (this.isModified('phone')) {
-    this.phone = this.phone.replace(/\s+/g, '').replace(/-/g, '');
+    // Remove todos os caracteres não numéricos, exceto o sinal de +
+    this.phone = this.phone.replace(/\s+/g, '').replace(/-/g, '').replace(/\(/g, '').replace(/\)/g, '');
     
     // Garantir formato internacional
     if (!this.phone.startsWith('+')) {
@@ -52,9 +53,20 @@ contactSchema.pre('save', function(next) {
         this.phone = '+55' + this.phone;
       }
     }
+    
+    // Garantir que o telefone seja único, verificando apenas os dígitos
+    // Remove o "+" e quaisquer outros caracteres não-numéricos para comparação
+    this.phone = '+' + this.phone.replace(/^\+/, '').replace(/\D/g, '');
   }
   next();
 });
+
+// Método estático para verificar se um telefone já existe (considerando diferentes formatos)
+contactSchema.statics.phoneExists = async function(phone) {
+  // Normaliza o telefone para comparação
+  const normalizedPhone = '+' + phone.replace(/^\+/, '').replace(/\D/g, '');
+  return await this.findOne({ phone: normalizedPhone });
+};
 
 const Contact = mongoose.model('Contact', contactSchema);
 

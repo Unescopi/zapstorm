@@ -2,6 +2,25 @@ const { Contact } = require('../models');
 const logger = require('../utils/logger');
 const csv = require('csv-parser');
 const fs = require('fs');
+const { createObjectCsvWriter } = require('csv-writer');
+const path = require('path');
+
+// Função utilitária para normalizar telefone
+const normalizePhone = (phone) => {
+  // Remove todos os caracteres não numéricos, exceto o sinal de +
+  let normalizedPhone = phone.replace(/\s+/g, '').replace(/-/g, '').replace(/\(/g, '').replace(/\)/g, '');
+  
+  // Garantir formato internacional
+  if (!normalizedPhone.startsWith('+')) {
+    // Se começar apenas com números, presumir Brasil +55
+    if (/^\d+$/.test(normalizedPhone)) {
+      normalizedPhone = '+55' + normalizedPhone;
+    }
+  }
+  
+  // Garantir formato consistente
+  return '+' + normalizedPhone.replace(/^\+/, '').replace(/\D/g, '');
+};
 
 // Obter todos os contatos com paginação e filtros
 exports.getContacts = async (req, res) => {
@@ -83,8 +102,11 @@ exports.createContact = async (req, res) => {
   try {
     const { phone, name, tags } = req.body;
     
-    // Verificar se o telefone já existe
-    const existingContact = await Contact.findOne({ phone });
+    // Normalizar número do telefone
+    const normalizedPhone = normalizePhone(phone);
+    
+    // Verificar se o telefone já existe (usando método estático)
+    const existingContact = await Contact.phoneExists(normalizedPhone);
     if (existingContact) {
       return res.status(400).json({
         success: false,
@@ -94,7 +116,7 @@ exports.createContact = async (req, res) => {
     
     // Criar novo contato
     const contact = await Contact.create({
-      phone,
+      phone: normalizedPhone,
       name,
       tags: tags || []
     });
@@ -118,10 +140,14 @@ exports.updateContact = async (req, res) => {
   try {
     const { phone, name, tags } = req.body;
     
+    let normalizedPhone;
+    
     // Verificar se o telefone já existe em outro contato
     if (phone) {
+      normalizedPhone = normalizePhone(phone);
+      
       const existingContact = await Contact.findOne({ 
-        phone, 
+        phone: normalizedPhone, 
         _id: { $ne: req.params.id } 
       });
       
@@ -137,7 +163,7 @@ exports.updateContact = async (req, res) => {
     const contact = await Contact.findByIdAndUpdate(
       req.params.id,
       { 
-        phone,
+        phone: normalizedPhone,
         name,
         tags,
         lastUpdated: Date.now()
@@ -192,6 +218,34 @@ exports.deleteContact = async (req, res) => {
   }
 };
 
+// Excluir múltiplos contatos
+exports.deleteMultipleContacts = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lista de IDs inválida'
+      });
+    }
+    
+    const result = await Contact.deleteMany({ _id: { $in: ids } });
+    
+    res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} contatos excluídos com sucesso`
+    });
+  } catch (error) {
+    logger.error('Erro ao excluir múltiplos contatos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao excluir contatos',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 // Importar contatos de CSV
 exports.importCSV = async (req, res) => {
   try {
@@ -224,8 +278,11 @@ exports.importCSV = async (req, res) => {
         }
         
         try {
+          // Normalizar o telefone
+          const normalizedPhone = normalizePhone(phone);
+          
           // Verificar se o contato já existe
-          const existingContact = await Contact.findOne({ phone });
+          const existingContact = await Contact.phoneExists(normalizedPhone);
           
           if (existingContact) {
             duplicates++;
@@ -234,9 +291,9 @@ exports.importCSV = async (req, res) => {
           
           // Adicionar à lista de resultados
           results.push({
-            phone,
+            phone: normalizedPhone,
             name: name || '',
-            tags: req.body.tags ? req.body.tags.split(',') : []
+            tags: req.body.tags ? req.body.tags.split(',').map(tag => tag.trim()) : []
           });
         } catch (error) {
           errors.push({
@@ -284,6 +341,92 @@ exports.importCSV = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erro ao importar contatos',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Exportar contatos para CSV
+exports.exportCSV = async (req, res) => {
+  try {
+    const { search, tag } = req.query;
+    
+    // Construir query com filtros
+    const query = {};
+    
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    if (tag) {
+      query.tags = tag;
+    }
+    
+    // Buscar todos os contatos que correspondem aos filtros
+    const contacts = await Contact.find(query).sort({ createdAt: -1 });
+    
+    if (contacts.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Nenhum contato encontrado para exportar'
+      });
+    }
+    
+    // Criar diretório de exportação se não existir
+    const exportDir = path.join(__dirname, '../../exports');
+    if (!fs.existsSync(exportDir)) {
+      fs.mkdirSync(exportDir, { recursive: true });
+    }
+    
+    // Gerar nome de arquivo único
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `contatos_${timestamp}.csv`;
+    const filepath = path.join(exportDir, filename);
+    
+    // Configurar escritor CSV
+    const csvWriter = createObjectCsvWriter({
+      path: filepath,
+      header: [
+        { id: 'name', title: 'Nome' },
+        { id: 'phone', title: 'Telefone' },
+        { id: 'tags', title: 'Tags' },
+        { id: 'createdAt', title: 'Data de Criação' }
+      ]
+    });
+    
+    // Formatar dados para CSV
+    const records = contacts.map(contact => ({
+      name: contact.name || '',
+      phone: contact.phone || '',
+      tags: contact.tags ? contact.tags.join(', ') : '',
+      createdAt: new Date(contact.createdAt).toLocaleString('pt-BR')
+    }));
+    
+    // Escrever arquivo CSV
+    await csvWriter.writeRecords(records);
+    
+    // Enviar arquivo como resposta
+    res.download(filepath, filename, (err) => {
+      if (err) {
+        logger.error('Erro ao enviar arquivo CSV:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao baixar o arquivo CSV',
+          error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+      }
+      
+      // Remover arquivo após download
+      fs.unlinkSync(filepath);
+    });
+  } catch (error) {
+    logger.error('Erro ao exportar contatos para CSV:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao exportar contatos',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

@@ -31,6 +31,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import DownloadIcon from '@mui/icons-material/Download';
 import api from '../../services/api';
 import MuiAlert from '@mui/material/Alert';
 
@@ -71,6 +72,9 @@ const Contacts: React.FC = () => {
   // Novos estados para seleção múltipla
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [multipleDeleteConfirmOpen, setMultipleDeleteConfirmOpen] = useState(false);
+  
+  // Novo estado para exportação
+  const [exportLoading, setExportLoading] = useState(false);
 
   useEffect(() => {
     loadContacts();
@@ -197,11 +201,7 @@ const Contacts: React.FC = () => {
     
     try {
       setLoading(true);
-      
-      // Excluir cada contato sequencialmente
-      for (const contactId of selectedContacts) {
-        await api.delete(`/contacts/${contactId}`);
-      }
+      await api.post('/contacts/delete-multiple', { ids: selectedContacts });
       
       setSnackbar({ 
         open: true, 
@@ -209,15 +209,61 @@ const Contacts: React.FC = () => {
         severity: 'success' 
       });
       
-      // Limpar seleções e recarregar
-      setSelectedContacts([]);
       loadContacts();
       setMultipleDeleteConfirmOpen(false);
+      setSelectedContacts([]);
     } catch (error) {
       setSnackbar({ open: true, message: 'Erro ao excluir contatos', severity: 'error' });
-      console.error('Erro ao excluir contatos:', error);
+      console.error('Erro ao excluir múltiplos contatos:', error);
     } finally {
       setLoading(false);
+    }
+  };
+  
+  // Função para exportar contatos
+  const handleExport = async () => {
+    try {
+      setExportLoading(true);
+      
+      // Criar URL para download com os mesmos filtros da visualização atual
+      const params = new URLSearchParams();
+      if (searchTerm) params.append('search', searchTerm);
+      
+      // Fazer requisição para o endpoint de exportação com os parâmetros de filtro
+      const response = await api.get(`/contacts/export?${params.toString()}`, {
+        responseType: 'blob' // Importante para receber o arquivo como blob
+      });
+      
+      // Criar URL para o blob e iniciar download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Nome do arquivo
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'contatos.csv';
+      
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/);
+        if (filenameMatch && filenameMatch.length > 1) {
+          filename = filenameMatch[1];
+        }
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      
+      // Limpar URL criada
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+      
+      setSnackbar({ open: true, message: 'Exportação concluída com sucesso!', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ open: true, message: 'Erro ao exportar contatos', severity: 'error' });
+      console.error('Erro ao exportar contatos:', error);
+    } finally {
+      setExportLoading(false);
     }
   };
 
@@ -226,14 +272,13 @@ const Contacts: React.FC = () => {
     setDeleteConfirmOpen(true);
   };
 
-  // Manipuladores para checkboxes
   const handleSelectAll = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.checked) {
       const newSelected = contacts.map(contact => contact._id);
       setSelectedContacts(newSelected);
-    } else {
-      setSelectedContacts([]);
+      return;
     }
+    setSelectedContacts([]);
   };
 
   const handleSelectOne = (id: string) => {
@@ -241,9 +286,16 @@ const Contacts: React.FC = () => {
     let newSelected: string[] = [];
 
     if (selectedIndex === -1) {
-      newSelected = [...selectedContacts, id];
-    } else {
-      newSelected = selectedContacts.filter(item => item !== id);
+      newSelected = newSelected.concat(selectedContacts, id);
+    } else if (selectedIndex === 0) {
+      newSelected = newSelected.concat(selectedContacts.slice(1));
+    } else if (selectedIndex === selectedContacts.length - 1) {
+      newSelected = newSelected.concat(selectedContacts.slice(0, -1));
+    } else if (selectedIndex > 0) {
+      newSelected = newSelected.concat(
+        selectedContacts.slice(0, selectedIndex),
+        selectedContacts.slice(selectedIndex + 1)
+      );
     }
 
     setSelectedContacts(newSelected);
@@ -261,42 +313,40 @@ const Contacts: React.FC = () => {
   };
 
   const formatPhoneNumber = (phone: string) => {
-    // Remove qualquer caractere não numérico
-    const cleaned = phone.replace(/\D/g, '');
+    // Remover qualquer caractere não numérico e o sinal de +
+    let digits = phone.replace(/\D/g, '');
     
-    // Verifica o formato do número (com ou sem código do país)
-    if (cleaned.length === 13 && cleaned.startsWith('55')) {
-      // Formato com código do país (+55)
-      const ddd = cleaned.substring(2, 4);
-      const part1 = cleaned.substring(4, 9);
-      const part2 = cleaned.substring(9);
-      return `+55 (${ddd}) ${part1}-${part2}`;
-    } else if (cleaned.length === 11) {
-      // Formato nacional com 9 dígitos (DDD + 9XXXXXXXX)
-      const ddd = cleaned.substring(0, 2);
-      const part1 = cleaned.substring(2, 7);
-      const part2 = cleaned.substring(7);
-      return `(${ddd}) ${part1}-${part2}`;
-    } else {
-      // Retorna o número como está se não se encaixar nos formatos acima
-      return phone;
+    // Garantir que temos apenas dígitos
+    if (!digits) return phone;
+    
+    // Se começar com 55 (código do Brasil), formatar como número brasileiro
+    if (digits.startsWith('55') && digits.length >= 12) {
+      // Formato: +55 (XX) XXXXX-XXXX
+      return `+55 (${digits.substring(2, 4)}) ${digits.substring(4, 9)}-${digits.substring(9)}`;
     }
+    
+    // Se não reconhecer o formato, retornar o número original formatado com +
+    return '+' + digits;
   };
 
-  // Função para formatar número de telefone para o formato internacional
   const formatPhoneForImport = (phone: string): string => {
-    let formattedPhone = phone.replace(/\D/g, ''); // Remove caracteres não numéricos
+    // Remove todos os caracteres não numéricos, exceto o sinal de +
+    const cleaned = phone.replace(/[^\d+]/g, '');
     
-    // Adicionar código do país se não existir
-    if (!formattedPhone.startsWith('55')) {
-      formattedPhone = '55' + formattedPhone;
+    // Verificar se já tem o + no início
+    if (cleaned.startsWith('+')) {
+      return cleaned;
     }
     
-    // Adicionar o sinal de + para formato internacional
-    return '+' + formattedPhone;
+    // Se não tiver +, verificar se tem o código do país
+    if (cleaned.startsWith('55')) {
+      return '+' + cleaned;
+    }
+    
+    // Se não tiver código do país, adicionar +55 (Brasil)
+    return '+55' + cleaned;
   };
 
-  // Função para processar a importação de contatos
   const handleImport = async () => {
     if (!importText.trim()) {
       setSnackbar({ open: true, message: 'Por favor, insira alguns contatos para importar', severity: 'warning' });
@@ -390,6 +440,16 @@ const Contacts: React.FC = () => {
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Contatos</Typography>
         <Box>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            startIcon={<DownloadIcon />}
+            onClick={handleExport}
+            disabled={exportLoading || contacts.length === 0}
+            sx={{ mr: 1 }}
+          >
+            {exportLoading ? 'Exportando...' : 'Exportar Contatos'}
+          </Button>
           <Button 
             variant="outlined" 
             color="primary" 
