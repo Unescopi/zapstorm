@@ -263,14 +263,30 @@ const processRecurringCampaigns = async () => {
       
       logger.info(`Verificando se a campanha já foi executada hoje (após ${new Date(todayStartTimestamp).toISOString()})`);
       
-      const lastRun = await Message.findOne({
+      // Buscar mensagens criadas hoje para esta campanha
+      const completedMessages = await Message.find({
         campaignId: campaign._id,
         createdAt: { $gte: new Date(todayStartTimestamp) }
       });
       
-      if (lastRun) {
-        logger.info(`Campanha ${campaign._id} JÁ foi executada hoje (${lastRun.createdAt.toISOString()}), pulando...`);
-        continue;
+      logger.info(`Verificando campanhas concluídas: ${completedMessages.length} campanhas encontradas`);
+      
+      if (completedMessages.length > 0) {
+        // Verificar se alguma mensagem foi realmente enviada hoje no horário do Brasil
+        // Isso ajuda a evitar problemas com diferenças de fuso horário
+        const messagesToday = completedMessages.filter(msg => {
+          const msgDate = new Date(msg.createdAt);
+          const msgDateBrazil = new Date(msgDate.getTime() + (BRAZIL_TIMEZONE_OFFSET * 60000));
+          return msgDateBrazil.getUTCDate() === nowBrazil.getUTCDate() &&
+                 msgDateBrazil.getUTCMonth() === nowBrazil.getUTCMonth() &&
+                 msgDateBrazil.getUTCFullYear() === nowBrazil.getUTCFullYear();
+        });
+        
+        if (messagesToday.length > 0) {
+          const lastMsg = messagesToday[0];
+          logger.info(`Campanha ${campaign._id} JÁ foi executada hoje (${lastMsg.createdAt.toISOString()}), pulando...`);
+          continue;
+        }
       }
       
       logger.info(`Campanha ${campaign._id} NÃO foi executada hoje, iniciando agora...`);
