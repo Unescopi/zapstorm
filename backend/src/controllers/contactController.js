@@ -527,34 +527,42 @@ exports.getTags = async (req, res) => {
 exports.findAndRemoveDuplicates = async (req, res) => {
   try {
     // Buscar todos os contatos
-    const allContacts = await Contact.find({}, null, { lean: true });
+    const allContacts = await Contact.find({}).lean();
     
-    // Mapear contatos por telefone normalizado
-    const contactsByPhone = {};
-    
-    // Agrupar contatos pelo número de telefone normalizado
-    allContacts.forEach(contact => {
-      // Sempre recalcular a normalização para garantir consistência
-      const phoneKey = getNormalizedPhoneForComparison(contact.phone);
-      
-      if (!contactsByPhone[phoneKey]) {
-        contactsByPhone[phoneKey] = [];
-      }
-      
-      contactsByPhone[phoneKey].push(contact);
-    });
-    
-    // Filtrar apenas os números que têm mais de um contato
+    // Arrays para acompanhar duplicados
     const duplicatesFound = {};
+    const processedPhones = {};
     let totalDuplicates = 0;
     
-    Object.keys(contactsByPhone).forEach(phone => {
-      if (contactsByPhone[phone].length > 1) {
-        duplicatesFound[phone] = contactsByPhone[phone];
-        totalDuplicates += (contactsByPhone[phone].length - 1); // Contar duplicatas (exceto o original)
-      }
-    });
+    // Função para extrair apenas os dígitos de um número
+    const extractDigits = (phone) => phone.replace(/\D/g, '');
     
+    // Para cada contato, verificar se é duplicado de algum outro
+    for (let i = 0; i < allContacts.length; i++) {
+      const contact = allContacts[i];
+      const phoneDigits = extractDigits(contact.phone);
+      
+      // Ignorar telefones muito curtos (menos de 5 dígitos)
+      if (phoneDigits.length < 5) continue;
+      
+      // Pegar os últimos 8 dígitos (parte significativa do número)
+      const lastDigits = phoneDigits.slice(-8);
+      
+      // Se já processamos este número, adicionar à lista de duplicados
+      if (processedPhones[lastDigits]) {
+        if (!duplicatesFound[lastDigits]) {
+          duplicatesFound[lastDigits] = [processedPhones[lastDigits]];
+          totalDuplicates++;
+        }
+        duplicatesFound[lastDigits].push(contact);
+        totalDuplicates++;
+      } else {
+        // Registrar o primeiro contato com estes últimos dígitos
+        processedPhones[lastDigits] = contact;
+      }
+    }
+    
+    // Verificar se encontramos duplicados
     if (Object.keys(duplicatesFound).length === 0) {
       return res.status(200).json({
         success: true,
@@ -565,7 +573,7 @@ exports.findAndRemoveDuplicates = async (req, res) => {
       });
     }
     
-    // Retornar informações sobre duplicatas encontradas sem remover
+    // Modo de visualização (sem remoção)
     if (req.query.dryRun === 'true') {
       return res.status(200).json({
         success: true,
@@ -581,14 +589,14 @@ exports.findAndRemoveDuplicates = async (req, res) => {
     // Array para armazenar IDs a serem removidos
     const idsToRemove = [];
     
-    // Para cada conjunto de telefones duplicados, manter apenas o mais antigo
-    Object.values(duplicatesFound).forEach(duplicateContacts => {
+    // Para cada grupo de duplicados, manter apenas o mais antigo
+    Object.values(duplicatesFound).forEach(contacts => {
       // Ordenar por data de criação (do mais antigo para o mais recente)
-      const sortedContacts = [...duplicateContacts].sort((a, b) => 
+      const sortedContacts = [...contacts].sort((a, b) => 
         new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
       
-      // Pular o primeiro contato (mais antigo) e incluir os demais para remoção
+      // Manter o primeiro (mais antigo) e remover os demais
       for (let i = 1; i < sortedContacts.length; i++) {
         idsToRemove.push(sortedContacts[i]._id);
       }

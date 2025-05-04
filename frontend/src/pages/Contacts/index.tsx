@@ -473,49 +473,30 @@ const Contacts: React.FC = () => {
   const findDuplicates = async () => {
     try {
       setDuplicatesLoading(true);
-      // Buscar todos os contatos (sem paginação)
-      const response = await api.get('/contacts', {
-        params: {
-          limit: 1000000, // Número grande para obter todos
-        }
-      });
       
-      const allContacts = response.data.data;
+      // Chamar o endpoint de identificação de duplicados no modo dry-run (sem remover)
+      const response = await api.post('/contacts/remove-duplicates?dryRun=true');
       
-      // Organizar contatos por número de telefone
-      const contactsByPhone: { [key: string]: Contact[] } = {};
-      
-      allContacts.forEach((contact: Contact) => {
-        // Normalizar o telefone para comparação (remover formatações)
-        const normalizedPhone = contact.phone.replace(/\D/g, '');
-        
-        if (!contactsByPhone[normalizedPhone]) {
-          contactsByPhone[normalizedPhone] = [];
-        }
-        
-        contactsByPhone[normalizedPhone].push(contact);
-      });
-      
-      // Filtrar apenas os números que têm mais de um contato
-      const duplicatesFound: { [key: string]: Contact[] } = {};
-      
-      Object.keys(contactsByPhone).forEach(phone => {
-        if (contactsByPhone[phone].length > 1) {
-          duplicatesFound[phone] = contactsByPhone[phone];
-        }
-      });
-      
-      setDuplicates(duplicatesFound);
-      setDuplicatesDialogOpen(true);
-      
-      // Se não encontrou duplicados, exibir mensagem
-      if (Object.keys(duplicatesFound).length === 0) {
+      if (response.data.data.duplicatesFound === 0) {
         setSnackbar({ 
           open: true, 
           message: 'Não foram encontrados contatos com números duplicados!', 
           severity: 'info' 
         });
+        setDuplicatesDialogOpen(false);
+        return;
       }
+      
+      // Normalizar a resposta para manter compatibilidade com a interface existente
+      const duplicatesData: { [key: string]: Contact[] } = {};
+      
+      // Transformar a estrutura de dados para o formato esperado pela interface
+      Object.entries(response.data.data.duplicates).forEach(([key, value]) => {
+        duplicatesData[key] = value as Contact[];
+      });
+      
+      setDuplicates(duplicatesData);
+      setDuplicatesDialogOpen(true);
       
     } catch (error) {
       setSnackbar({ 
@@ -534,26 +515,12 @@ const Contacts: React.FC = () => {
     try {
       setRemovingDuplicates(true);
       
-      // Para cada conjunto de telefones duplicados, manter apenas o primeiro e excluir os demais
-      const deletionPromises: Promise<any>[] = [];
-      
-      Object.values(duplicates).forEach(duplicateContacts => {
-        // Ordenar por data de criação (manter o mais antigo)
-        const sortedContacts = [...duplicateContacts].sort((a, b) => 
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        );
-        
-        // Pular o primeiro contato (mais antigo) e excluir os demais
-        for (let i = 1; i < sortedContacts.length; i++) {
-          deletionPromises.push(api.delete(`/contacts/${sortedContacts[i]._id}`));
-        }
-      });
-      
-      await Promise.all(deletionPromises);
+      // Chamar o endpoint para remover duplicados efetivamente
+      const response = await api.post('/contacts/remove-duplicates');
       
       setSnackbar({ 
         open: true, 
-        message: `${deletionPromises.length} contato(s) duplicado(s) removido(s) com sucesso!`, 
+        message: `${response.data.data.removed} contato(s) duplicado(s) removido(s) com sucesso!`, 
         severity: 'success' 
       });
       
