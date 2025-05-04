@@ -5,6 +5,27 @@ const fs = require('fs');
 const { createObjectCsvWriter } = require('csv-writer');
 const path = require('path');
 
+// Função para normalizar telefone sem o 9 para comparação
+function getNormalizedPhoneForComparison(phone) {
+  // Remove todos os caracteres não numéricos, inclusive o +
+  const digitsOnly = phone.replace(/\D/g, '');
+  
+  // Para números brasileiros, removemos o 9 adicional para normalização
+  if (digitsOnly.startsWith('55') && digitsOnly.length > 10) {
+    // Se começa com 55 (Brasil) e tem mais de 10 dígitos, verificamos o 9
+    // Formato: 55 + DDD(2) + 9?(1) + Número(8)
+    const ddd = digitsOnly.substring(2, 4);
+    
+    // Se tem o 9, removemos para comparação
+    if (digitsOnly.length >= 12) {
+      const withoutNine = '55' + ddd + digitsOnly.substring(5);
+      return withoutNine;
+    }
+  }
+  
+  return digitsOnly;
+}
+
 // Função utilitária para normalizar telefone
 const normalizePhone = (phone) => {
   // Remove todos os caracteres não numéricos, exceto o sinal de +
@@ -114,9 +135,13 @@ exports.createContact = async (req, res) => {
       });
     }
     
+    // Calcular phoneNormalized para comparação
+    const phoneNormalized = getNormalizedPhoneForComparison(normalizedPhone);
+    
     // Criar novo contato
     const contact = await Contact.create({
       phone: normalizedPhone,
+      phoneNormalized: phoneNormalized,
       name,
       tags: tags || []
     });
@@ -141,10 +166,12 @@ exports.updateContact = async (req, res) => {
     const { phone, name, tags } = req.body;
     
     let normalizedPhone;
+    let phoneNormalized;
     
     // Verificar se o telefone já existe em outro contato
     if (phone) {
       normalizedPhone = normalizePhone(phone);
+      phoneNormalized = getNormalizedPhoneForComparison(normalizedPhone);
       
       const existingContact = await Contact.findOne({ 
         phone: normalizedPhone, 
@@ -164,6 +191,7 @@ exports.updateContact = async (req, res) => {
       req.params.id,
       { 
         phone: normalizedPhone,
+        phoneNormalized: phoneNormalized,
         name,
         tags,
         lastUpdated: Date.now()
@@ -289,9 +317,13 @@ exports.importCSV = async (req, res) => {
             return;
           }
           
+          // Calcular phoneNormalized para comparação
+          const phoneNormalized = getNormalizedPhoneForComparison(normalizedPhone);
+          
           // Adicionar à lista de resultados
           results.push({
             phone: normalizedPhone,
+            phoneNormalized: phoneNormalized,
             name: name || '',
             tags: req.body.tags ? req.body.tags.split(',').map(tag => tag.trim()) : []
           });
