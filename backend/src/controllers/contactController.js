@@ -10,16 +10,17 @@ function getNormalizedPhoneForComparison(phone) {
   // Remove todos os caracteres não numéricos, inclusive o +
   const digitsOnly = phone.replace(/\D/g, '');
   
-  // Para números brasileiros, removemos o 9 adicional para normalização
-  if (digitsOnly.startsWith('55') && digitsOnly.length > 10) {
-    // Se começa com 55 (Brasil) e tem mais de 10 dígitos, verificamos o 9
-    // Formato: 55 + DDD(2) + 9?(1) + Número(8)
+  // Para números brasileiros, faremos uma normalização especial
+  if (digitsOnly.startsWith('55')) {
     const ddd = digitsOnly.substring(2, 4);
     
-    // Se tem o 9, removemos para comparação
-    if (digitsOnly.length >= 12) {
-      const withoutNine = '55' + ddd + digitsOnly.substring(5);
-      return withoutNine;
+    // Tentaremos extrair os últimos 8 dígitos do número para comparação
+    // para lidar com variações de formatação e número de dígitos
+    if (digitsOnly.length >= 10) { // Pelo menos DDD + 8 dígitos
+      // Extrair os últimos 8 dígitos (número base sem o 9)
+      const last8Digits = digitsOnly.substring(digitsOnly.length - 8);
+      // Normalizar como 55 + DDD + últimos 8 dígitos
+      return '55' + ddd + last8Digits;
     }
   }
   
@@ -533,7 +534,8 @@ exports.findAndRemoveDuplicates = async (req, res) => {
     
     // Agrupar contatos pelo número de telefone normalizado
     allContacts.forEach(contact => {
-      const phoneKey = contact.phoneNormalized || getNormalizedPhoneForComparison(contact.phone);
+      // Sempre recalcular a normalização para garantir consistência
+      const phoneKey = getNormalizedPhoneForComparison(contact.phone);
       
       if (!contactsByPhone[phoneKey]) {
         contactsByPhone[phoneKey] = [];

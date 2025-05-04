@@ -50,16 +50,16 @@ function getNormalizedPhoneForComparison(phone) {
   // Remove todos os caracteres não numéricos, inclusive o +
   const digitsOnly = phone.replace(/\D/g, '');
   
-  // Para números brasileiros, removemos o 9 adicional para normalização
-  if (digitsOnly.startsWith('55') && digitsOnly.length > 10) {
-    // Se começa com 55 (Brasil) e tem mais de 10 dígitos, verificamos o 9
-    // Formato: 55 + DDD(2) + 9?(1) + Número(8)
+  // Para números brasileiros, faremos uma normalização especial
+  if (digitsOnly.startsWith('55')) {
     const ddd = digitsOnly.substring(2, 4);
     
-    // Se tem o 9, removemos para comparação
-    if (digitsOnly.length >= 12) {
-      const withoutNine = '55' + ddd + digitsOnly.substring(5);
-      return withoutNine;
+    // Tentaremos extrair os últimos 8 dígitos do número para comparação
+    if (digitsOnly.length >= 10) { // Pelo menos DDD + 8 dígitos
+      // Extrair os últimos 8 dígitos (número base sem o 9)
+      const last8Digits = digitsOnly.substring(digitsOnly.length - 8);
+      // Normalizar como 55 + DDD + últimos 8 dígitos
+      return '55' + ddd + last8Digits;
     }
   }
   
@@ -98,15 +98,27 @@ contactSchema.statics.phoneExists = async function(phone) {
   const digitsOnly = phone.replace(/\D/g, '');
   const formattedPhone = '+' + digitsOnly;
   
-  // Versão normalizada para comparação (sem o 9 extra)
+  // Versão normalizada para comparação (usando os últimos 8 dígitos)
   const normalizedPhone = getNormalizedPhoneForComparison(formattedPhone);
   
   // Buscar contato com o número exato
   const exactMatch = await this.findOne({ phone: formattedPhone });
   if (exactMatch) return exactMatch;
   
-  // Buscar contato com o número normalizado
-  return await this.findOne({ phoneNormalized: normalizedPhone });
+  // Buscar contato com o número normalizado - usando regex para encontrar correspondências com final igual
+  const phoneQuery = {
+    $or: [
+      { phoneNormalized: normalizedPhone },
+      { 
+        // Buscar por números que terminem com os mesmos últimos 8 dígitos
+        phone: { 
+          $regex: new RegExp(normalizedPhone.substring(normalizedPhone.length - 8) + '$') 
+        } 
+      }
+    ]
+  };
+  
+  return await this.findOne(phoneQuery);
 };
 
 // Método estático para verificar e atualizar um número antigo para formato com 9 dígitos
