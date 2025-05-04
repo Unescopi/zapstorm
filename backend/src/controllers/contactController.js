@@ -51,6 +51,25 @@ exports.getContacts = async (req, res) => {
     const search = req.query.search || '';
     const tag = req.query.tag || '';
     
+    // Parâmetros de ordenação
+    const sortField = req.query.sortField || 'name'; // campo padrão é nome
+    const sortOrder = req.query.sortOrder === 'desc' ? -1 : 1; // asc (crescente, 1) ou desc (decrescente, -1)
+    
+    // Mapear campos de ordenação permitidos
+    const allowedSortFields = {
+      'name': 'name',
+      'phone': 'phone',
+      'createdAt': 'createdAt',
+      'lastUpdated': 'lastUpdated'
+    };
+    
+    // Verificar se o campo de ordenação é válido
+    const actualSortField = allowedSortFields[sortField] || 'name';
+    
+    // Construir objeto de ordenação
+    const sort = {};
+    sort[actualSortField] = sortOrder;
+    
     // Construir query com filtros
     const query = {};
     
@@ -70,7 +89,7 @@ exports.getContacts = async (req, res) => {
     
     // Buscar contatos com paginação
     const contacts = await Contact.find(query)
-      .sort({ name: 1 }) // Ordenar por nome de A-Z (ascendente)
+      .sort(sort)
       .skip((page - 1) * limit)
       .limit(limit);
     
@@ -80,6 +99,8 @@ exports.getContacts = async (req, res) => {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      sortField: actualSortField,
+      sortOrder: sortOrder === 1 ? 'asc' : 'desc',
       data: contacts
     });
   } catch (error) {
@@ -381,7 +402,25 @@ exports.importCSV = async (req, res) => {
 // Exportar contatos para CSV
 exports.exportCSV = async (req, res) => {
   try {
-    const { search, tag } = req.query;
+    const { search, tag, sortField, sortOrder } = req.query;
+    
+    // Parâmetros de ordenação
+    const orderDirection = sortOrder === 'desc' ? -1 : 1; // asc (crescente, 1) ou desc (decrescente, -1)
+    
+    // Mapear campos de ordenação permitidos
+    const allowedSortFields = {
+      'name': 'name',
+      'phone': 'phone',
+      'createdAt': 'createdAt',
+      'lastUpdated': 'lastUpdated'
+    };
+    
+    // Verificar se o campo de ordenação é válido
+    const actualSortField = allowedSortFields[sortField] || 'name';
+    
+    // Construir objeto de ordenação
+    const sort = {};
+    sort[actualSortField] = orderDirection;
     
     // Construir query com filtros
     const query = {};
@@ -398,7 +437,7 @@ exports.exportCSV = async (req, res) => {
     }
     
     // Buscar todos os contatos que correspondem aos filtros
-    const contacts = await Contact.find(query).sort({ name: 1 });
+    const contacts = await Contact.find(query).sort(sort);
     
     if (contacts.length === 0) {
       return res.status(404).json({
