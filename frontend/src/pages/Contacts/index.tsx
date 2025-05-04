@@ -24,7 +24,9 @@ import {
   AlertColor,
   LinearProgress,
   Checkbox,
-  Tooltip
+  Tooltip,
+  TableSortLabel,
+  Chip
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -42,6 +44,7 @@ type Contact = {
   email?: string;
   tags?: string[];
   createdAt: string;
+  lastUpdated: string;
 };
 
 const Contacts: React.FC = () => {
@@ -62,6 +65,10 @@ const Contacts: React.FC = () => {
   const [totalContacts, setTotalContacts] = useState(0);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: AlertColor }>({ open: false, message: '', severity: 'success' });
   
+  // Estados para ordenação
+  const [sortField, setSortField] = useState<string>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  
   // Novos estados para importação de contatos
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importText, setImportText] = useState('');
@@ -78,7 +85,7 @@ const Contacts: React.FC = () => {
 
   useEffect(() => {
     loadContacts();
-  }, [page, rowsPerPage, searchTerm]);
+  }, [page, rowsPerPage, searchTerm, sortField, sortOrder]);
 
   // Limpar seleções quando mudar de página ou filtro
   useEffect(() => {
@@ -92,7 +99,9 @@ const Contacts: React.FC = () => {
         params: {
           page: page + 1,
           limit: rowsPerPage,
-          search: searchTerm || undefined
+          search: searchTerm || undefined,
+          sortField,
+          sortOrder
         }
       });
       setContacts(response.data.data);
@@ -220,6 +229,18 @@ const Contacts: React.FC = () => {
     }
   };
   
+  // Função para ordenar os contatos
+  const handleSort = (field: string) => {
+    // Se clicar no mesmo campo que já está ordenando, inverte a direção
+    if (field === sortField) {
+      setSortOrder(prevOrder => prevOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Se clicar em um novo campo, ordena ascendente por padrão
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+
   // Função para exportar contatos
   const handleExport = async () => {
     try {
@@ -228,6 +249,8 @@ const Contacts: React.FC = () => {
       // Criar URL para download com os mesmos filtros da visualização atual
       const params = new URLSearchParams();
       if (searchTerm) params.append('search', searchTerm);
+      params.append('sortField', sortField);
+      params.append('sortOrder', sortOrder);
       
       // Fazer requisição para o endpoint de exportação com os parâmetros de filtro
       const response = await api.get(`/contacts/export?${params.toString()}`, {
@@ -518,11 +541,35 @@ const Contacts: React.FC = () => {
                       onChange={handleSelectAll}
                     />
                   </TableCell>
-                  <TableCell>Nome</TableCell>
-                  <TableCell>Telefone</TableCell>
+                  <TableCell>
+                    <TableSortLabel
+                      active={sortField === 'name'}
+                      direction={sortField === 'name' ? sortOrder : 'asc'}
+                      onClick={() => handleSort('name')}
+                    >
+                      Nome
+                    </TableSortLabel>
+                  </TableCell>
+                  <TableCell>
+                    <TableSortLabel
+                      active={sortField === 'phone'}
+                      direction={sortField === 'phone' ? sortOrder : 'asc'}
+                      onClick={() => handleSort('phone')}
+                    >
+                      Telefone
+                    </TableSortLabel>
+                  </TableCell>
                   <TableCell>Email</TableCell>
                   <TableCell>Tags</TableCell>
-                  <TableCell>Criado em</TableCell>
+                  <TableCell>
+                    <TableSortLabel
+                      active={sortField === 'createdAt'}
+                      direction={sortField === 'createdAt' ? sortOrder : 'asc'}
+                      onClick={() => handleSort('createdAt')}
+                    >
+                      Criado em
+                    </TableSortLabel>
+                  </TableCell>
                   <TableCell align="center">Ações</TableCell>
                 </TableRow>
               </TableHead>
@@ -546,7 +593,15 @@ const Contacts: React.FC = () => {
                         <TableCell>{contact.name}</TableCell>
                         <TableCell>{formatPhoneNumber(contact.phone)}</TableCell>
                         <TableCell>{contact.email || '-'}</TableCell>
-                        <TableCell>{contact.tags?.join(', ') || '-'}</TableCell>
+                        <TableCell>
+                          {contact.tags && contact.tags.length > 0 ? (
+                            <Box display="flex" flexWrap="wrap" gap={0.5}>
+                              {contact.tags.map((tag, index) => (
+                                <Chip key={index} label={tag} size="small" />
+                              ))}
+                            </Box>
+                          ) : '-'}
+                        </TableCell>
                         <TableCell>{new Date(contact.createdAt).toLocaleString()}</TableCell>
                         <TableCell align="center">
                           <Tooltip title="Editar">
@@ -579,7 +634,7 @@ const Contacts: React.FC = () => {
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} align="center">
+                    <TableCell colSpan={8} align="center">
                       Nenhum contato encontrado
                     </TableCell>
                   </TableRow>
