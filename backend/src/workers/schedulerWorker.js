@@ -147,15 +147,26 @@ const checkCompletedCampaigns = async () => {
 
 // Processar campanhas recorrentes
 const processRecurringCampaigns = async () => {
-  const now = new Date();
-  const currentDayOfWeek = now.getDay(); // 0 (Domingo) a 6 (Sábado)
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
+  // Obter a data atual em UTC
+  const nowUtc = new Date();
+  
+  // Obter a data atual no fuso horário local (Brasil)
+  // Cria data no fuso horário local
+  const nowLocal = new Date();
+  
+  // Calcular o offset do fuso horário local em minutos
+  const timezoneOffsetMinutes = nowLocal.getTimezoneOffset();
+  
+  const currentDayOfWeek = nowLocal.getDay(); // 0 (Domingo) a 6 (Sábado)
+  const currentHour = nowLocal.getHours();
+  const currentMinute = nowLocal.getMinutes();
   const currentTime = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
   
   logger.info(`=== VERIFICANDO CAMPANHAS RECORRENTES ===`);
-  logger.info(`Data e hora atual: ${now.toISOString()}`);
-  logger.info(`Dia da semana: ${currentDayOfWeek}, Hora atual: ${currentTime}`);
+  logger.info(`Data e hora UTC: ${nowUtc.toISOString()}`);
+  logger.info(`Data e hora local: ${nowLocal.toLocaleString()}`);
+  logger.info(`Fuso horário offset: ${timezoneOffsetMinutes} minutos`);
+  logger.info(`Dia da semana: ${currentDayOfWeek}, Hora local atual: ${currentTime}`);
   
   try {
     // Buscar campanhas recorrentes ativas
@@ -168,7 +179,7 @@ const processRecurringCampaigns = async () => {
     
     for (const campaign of recurringCampaigns) {
       logger.info(`\nAnalisando campanha: "${campaign.name}" (ID: ${campaign._id})`);
-      logger.info(`Padrão de recorrência: ${campaign.schedule.recurrencePattern}, Hora: ${campaign.schedule.recorrenceTime || '09:00'}`);
+      logger.info(`Padrão de recorrência: ${campaign.schedule.recurrencePattern}, Hora configurada: ${campaign.schedule.recurrenceTime || '09:00'}`);
       
       // Verificar se é dia de execução
       let shouldRunToday = false;
@@ -181,9 +192,9 @@ const processRecurringCampaigns = async () => {
         logger.info(`Campanha semanal - dias configurados: ${campaign.schedule.recurrenceDays?.join(', ')}, hoje (${currentDayOfWeek}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
       } else if (campaign.schedule.recurrencePattern === 'monthly') {
         // Verificar se é o mesmo dia do mês
-        const campaignDay = campaign.schedule.startAt ? new Date(campaign.schedule.startAt).getDate() : now.getDate();
-        shouldRunToday = now.getDate() === campaignDay;
-        logger.info(`Campanha mensal - dia configurado: ${campaignDay}, hoje (${now.getDate()}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
+        const campaignDay = campaign.schedule.startAt ? new Date(campaign.schedule.startAt).getDate() : nowLocal.getDate();
+        shouldRunToday = nowLocal.getDate() === campaignDay;
+        logger.info(`Campanha mensal - dia configurado: ${campaignDay}, hoje (${nowLocal.getDate()}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
       }
       
       if (!shouldRunToday) {
@@ -195,15 +206,20 @@ const processRecurringCampaigns = async () => {
       const targetTime = campaign.schedule.recurrenceTime || '09:00';
       const [targetHour, targetMinute] = targetTime.split(':').map(Number);
       
-      logger.info(`Horário configurado: ${targetTime}, Horário atual: ${currentTime}`);
+      logger.info(`Horário configurado: ${targetTime}, Horário local atual: ${currentTime}`);
       
-      // Criar objetos Date para comparação precisa
-      const targetDate = new Date(now);
+      // Criar um objeto Date com a data atual, mas com a hora configurada para comparação
+      const targetDate = new Date(nowLocal);
       targetDate.setHours(targetHour, targetMinute, 0, 0);
       
-      // Calcular diferença em minutos
-      const timeDiffMinutes = Math.abs(now - targetDate) / (1000 * 60);
+      // Criar um objeto Date com a data e hora atual para comparação
+      const currentDate = new Date(nowLocal);
       
+      // Calcular diferença em minutos
+      const timeDiffMinutes = Math.abs(currentDate - targetDate) / (1000 * 60);
+      
+      logger.info(`Data/hora alvo: ${targetDate.toLocaleString()}`);
+      logger.info(`Data/hora atual: ${currentDate.toLocaleString()}`);
       logger.info(`Diferença de tempo: ${timeDiffMinutes.toFixed(2)} minutos`);
       
       if (timeDiffMinutes > 5) {
@@ -214,7 +230,7 @@ const processRecurringCampaigns = async () => {
       logger.info(`Horário correto para execução da campanha ${campaign._id}`);
       
       // Verificar se já foi executada hoje
-      const today = new Date(now);
+      const today = new Date(nowLocal);
       today.setHours(0, 0, 0, 0);
       
       logger.info(`Verificando se a campanha já foi executada hoje (após ${today.toISOString()})`);
