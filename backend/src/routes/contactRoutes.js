@@ -40,6 +40,9 @@ router.post('/delete-multiple', contactController.deleteMultipleContacts);
 // Rota para obter todas as tags distintas
 router.get('/tags', contactController.getTags);
 
+// Rota para encontrar e remover contatos duplicados
+router.post('/remove-duplicates', contactController.findAndRemoveDuplicates);
+
 // Rotas para operações específicas em um contato
 router.route('/:id')
   .get(contactController.getContact)

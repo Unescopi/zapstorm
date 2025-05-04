@@ -520,4 +520,95 @@ exports.getTags = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+// Função para encontrar e remover contatos duplicados
+exports.findAndRemoveDuplicates = async (req, res) => {
+  try {
+    // Buscar todos os contatos
+    const allContacts = await Contact.find({}, null, { lean: true });
+    
+    // Mapear contatos por telefone normalizado
+    const contactsByPhone = {};
+    
+    // Agrupar contatos pelo número de telefone normalizado
+    allContacts.forEach(contact => {
+      const phoneKey = contact.phoneNormalized || getNormalizedPhoneForComparison(contact.phone);
+      
+      if (!contactsByPhone[phoneKey]) {
+        contactsByPhone[phoneKey] = [];
+      }
+      
+      contactsByPhone[phoneKey].push(contact);
+    });
+    
+    // Filtrar apenas os números que têm mais de um contato
+    const duplicatesFound = {};
+    let totalDuplicates = 0;
+    
+    Object.keys(contactsByPhone).forEach(phone => {
+      if (contactsByPhone[phone].length > 1) {
+        duplicatesFound[phone] = contactsByPhone[phone];
+        totalDuplicates += (contactsByPhone[phone].length - 1); // Contar duplicatas (exceto o original)
+      }
+    });
+    
+    if (Object.keys(duplicatesFound).length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Não foram encontrados contatos com números duplicados',
+        data: {
+          duplicatesFound: 0
+        }
+      });
+    }
+    
+    // Retornar informações sobre duplicatas encontradas sem remover
+    if (req.query.dryRun === 'true') {
+      return res.status(200).json({
+        success: true,
+        message: `Encontrados ${Object.keys(duplicatesFound).length} números com duplicatas (${totalDuplicates} contatos duplicados)`,
+        data: {
+          duplicatesFound: Object.keys(duplicatesFound).length,
+          totalDuplicates,
+          duplicates: duplicatesFound
+        }
+      });
+    }
+    
+    // Array para armazenar IDs a serem removidos
+    const idsToRemove = [];
+    
+    // Para cada conjunto de telefones duplicados, manter apenas o mais antigo
+    Object.values(duplicatesFound).forEach(duplicateContacts => {
+      // Ordenar por data de criação (do mais antigo para o mais recente)
+      const sortedContacts = [...duplicateContacts].sort((a, b) => 
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      
+      // Pular o primeiro contato (mais antigo) e incluir os demais para remoção
+      for (let i = 1; i < sortedContacts.length; i++) {
+        idsToRemove.push(sortedContacts[i]._id);
+      }
+    });
+    
+    // Remover contatos duplicados
+    const result = await Contact.deleteMany({ _id: { $in: idsToRemove } });
+    
+    res.status(200).json({
+      success: true,
+      message: `Foram removidos ${result.deletedCount} contatos duplicados`,
+      data: {
+        duplicatesFound: Object.keys(duplicatesFound).length,
+        removed: result.deletedCount
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao encontrar e remover duplicados:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao encontrar e remover duplicados',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 }; 

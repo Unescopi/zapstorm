@@ -26,7 +26,11 @@ import {
   Checkbox,
   Tooltip,
   TableSortLabel,
-  Chip
+  Chip,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemSecondaryAction
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -34,6 +38,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
+import FindReplaceIcon from '@mui/icons-material/FindReplace';
 import api from '../../services/api';
 import MuiAlert from '@mui/material/Alert';
 
@@ -82,6 +87,12 @@ const Contacts: React.FC = () => {
   
   // Novo estado para exportação
   const [exportLoading, setExportLoading] = useState(false);
+
+  // Novos estados para verificação de duplicados
+  const [duplicatesDialogOpen, setDuplicatesDialogOpen] = useState(false);
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
+  const [duplicates, setDuplicates] = useState<{ [key: string]: Contact[] }>({});
+  const [removingDuplicates, setRemovingDuplicates] = useState(false);
 
   useEffect(() => {
     loadContacts();
@@ -458,11 +469,125 @@ const Contacts: React.FC = () => {
     setImportText(e.target.value);
   };
 
+  // Função para encontrar contatos com telefones duplicados
+  const findDuplicates = async () => {
+    try {
+      setDuplicatesLoading(true);
+      // Buscar todos os contatos (sem paginação)
+      const response = await api.get('/contacts', {
+        params: {
+          limit: 1000000, // Número grande para obter todos
+        }
+      });
+      
+      const allContacts = response.data.data;
+      
+      // Organizar contatos por número de telefone
+      const contactsByPhone: { [key: string]: Contact[] } = {};
+      
+      allContacts.forEach((contact: Contact) => {
+        // Normalizar o telefone para comparação (remover formatações)
+        const normalizedPhone = contact.phone.replace(/\D/g, '');
+        
+        if (!contactsByPhone[normalizedPhone]) {
+          contactsByPhone[normalizedPhone] = [];
+        }
+        
+        contactsByPhone[normalizedPhone].push(contact);
+      });
+      
+      // Filtrar apenas os números que têm mais de um contato
+      const duplicatesFound: { [key: string]: Contact[] } = {};
+      
+      Object.keys(contactsByPhone).forEach(phone => {
+        if (contactsByPhone[phone].length > 1) {
+          duplicatesFound[phone] = contactsByPhone[phone];
+        }
+      });
+      
+      setDuplicates(duplicatesFound);
+      setDuplicatesDialogOpen(true);
+      
+      // Se não encontrou duplicados, exibir mensagem
+      if (Object.keys(duplicatesFound).length === 0) {
+        setSnackbar({ 
+          open: true, 
+          message: 'Não foram encontrados contatos com números duplicados!', 
+          severity: 'info' 
+        });
+      }
+      
+    } catch (error) {
+      setSnackbar({ 
+        open: true, 
+        message: 'Erro ao buscar contatos duplicados', 
+        severity: 'error' 
+      });
+      console.error('Erro ao buscar duplicados:', error);
+    } finally {
+      setDuplicatesLoading(false);
+    }
+  };
+  
+  // Função para remover contatos duplicados
+  const removeDuplicates = async () => {
+    try {
+      setRemovingDuplicates(true);
+      
+      // Para cada conjunto de telefones duplicados, manter apenas o primeiro e excluir os demais
+      const deletionPromises: Promise<any>[] = [];
+      
+      Object.values(duplicates).forEach(duplicateContacts => {
+        // Ordenar por data de criação (manter o mais antigo)
+        const sortedContacts = [...duplicateContacts].sort((a, b) => 
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+        
+        // Pular o primeiro contato (mais antigo) e excluir os demais
+        for (let i = 1; i < sortedContacts.length; i++) {
+          deletionPromises.push(api.delete(`/contacts/${sortedContacts[i]._id}`));
+        }
+      });
+      
+      await Promise.all(deletionPromises);
+      
+      setSnackbar({ 
+        open: true, 
+        message: `${deletionPromises.length} contato(s) duplicado(s) removido(s) com sucesso!`, 
+        severity: 'success' 
+      });
+      
+      // Fechar o diálogo e recarregar os contatos
+      setDuplicatesDialogOpen(false);
+      loadContacts();
+      
+    } catch (error) {
+      setSnackbar({ 
+        open: true, 
+        message: 'Erro ao remover contatos duplicados', 
+        severity: 'error' 
+      });
+      console.error('Erro ao remover duplicados:', error);
+    } finally {
+      setRemovingDuplicates(false);
+    }
+  };
+
   return (
     <Box p={3}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Contatos</Typography>
         <Box>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            startIcon={<FindReplaceIcon />}
+            onClick={findDuplicates}
+            disabled={duplicatesLoading}
+            sx={{ mr: 1 }}
+          >
+            {duplicatesLoading ? 'Buscando...' : 'Verificar Duplicados'}
+          </Button>
           <Button 
             variant="outlined" 
             color="primary" 
@@ -791,6 +916,67 @@ const Contacts: React.FC = () => {
           >
             {importLoading ? 'Importando...' : 'Importar'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Diálogo para mostrar contatos duplicados */}
+      <Dialog 
+        open={duplicatesDialogOpen} 
+        onClose={() => setDuplicatesDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Contatos com Números Duplicados</DialogTitle>
+        <DialogContent>
+          {Object.keys(duplicates).length === 0 ? (
+            <Typography>Não foram encontrados contatos com números duplicados.</Typography>
+          ) : (
+            <>
+              <Typography variant="body1" gutterBottom>
+                Foram encontrados {Object.keys(duplicates).length} números de telefone com contatos duplicados.
+                Ao remover duplicados, será mantido o registro mais antigo de cada número.
+              </Typography>
+              
+              <List>
+                {Object.entries(duplicates).map(([phone, contacts]) => (
+                  <React.Fragment key={phone}>
+                    <ListItem>
+                      <ListItemText 
+                        primary={`Telefone: ${formatPhoneNumber(contacts[0].phone)}`} 
+                        secondary={`${contacts.length} contatos com este número`} 
+                      />
+                    </ListItem>
+                    {contacts.map((contact, index) => (
+                      <ListItem key={contact._id} sx={{ pl: 4 }}>
+                        <ListItemText
+                          primary={`${index + 1}. ${contact.name}`}
+                          secondary={`Criado em: ${new Date(contact.createdAt).toLocaleString()}`}
+                        />
+                        {index === 0 && (
+                          <ListItemSecondaryAction>
+                            <Chip label="Será mantido" color="success" size="small" />
+                          </ListItemSecondaryAction>
+                        )}
+                      </ListItem>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </List>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDuplicatesDialogOpen(false)}>Cancelar</Button>
+          {Object.keys(duplicates).length > 0 && (
+            <Button 
+              onClick={removeDuplicates} 
+              variant="contained" 
+              color="primary"
+              disabled={removingDuplicates}
+            >
+              {removingDuplicates ? 'Removendo...' : 'Remover Duplicados'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
