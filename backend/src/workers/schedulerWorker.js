@@ -149,51 +149,95 @@ const checkCompletedCampaigns = async () => {
 const processRecurringCampaigns = async () => {
   const now = new Date();
   const currentDayOfWeek = now.getDay(); // 0 (Domingo) a 6 (Sábado)
-  const currentHourMinute = now.getHours().toString().padStart(2, '0') + ':' + 
-                            now.getMinutes().toString().padStart(2, '0');
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTime = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
+  
+  logger.info(`=== VERIFICANDO CAMPANHAS RECORRENTES ===`);
+  logger.info(`Data e hora atual: ${now.toISOString()}`);
+  logger.info(`Dia da semana: ${currentDayOfWeek}, Hora atual: ${currentTime}`);
   
   try {
-    // Buscar campanhas recorrentes
+    // Buscar campanhas recorrentes ativas
     const recurringCampaigns = await Campaign.find({
       status: { $in: ['draft', 'queued'] },
       'schedule.type': 'recurring'
     });
     
+    logger.info(`Encontradas ${recurringCampaigns.length} campanhas recorrentes para verificar`);
+    
     for (const campaign of recurringCampaigns) {
+      logger.info(`\nAnalisando campanha: "${campaign.name}" (ID: ${campaign._id})`);
+      logger.info(`Padrão de recorrência: ${campaign.schedule.recurrencePattern}, Hora: ${campaign.schedule.recorrenceTime || '09:00'}`);
+      
       // Verificar se é dia de execução
-      if (campaign.schedule.recurrencePattern === 'daily' || 
-         (campaign.schedule.recurrencePattern === 'weekly' && 
-          campaign.schedule.recurrenceDays.includes(currentDayOfWeek)) ||
-         (campaign.schedule.recurrencePattern === 'monthly' && 
-          now.getDate() === new Date(campaign.schedule.startAt).getDate())) {
-        
-        // Verificar se é hora de execução (com tolerância de 5 minutos)
-        const targetTime = campaign.schedule.recurrenceTime || '09:00';
-        const [targetHour, targetMinute] = targetTime.split(':').map(Number);
-        const targetDate = new Date(now);
-        targetDate.setHours(targetHour, targetMinute, 0, 0);
-        
-        const timeDiffMinutes = Math.abs(now - targetDate) / (1000 * 60);
-        
-        if (timeDiffMinutes <= 5) {
-          // Verificar se já foi executada hoje
-          const today = new Date(now);
-          today.setHours(0, 0, 0, 0);
-          
-          const lastRun = await Message.findOne({
-            campaignId: campaign._id,
-            createdAt: { $gte: today }
-          });
-          
-          if (!lastRun) {
-            logger.info(`Iniciando campanha recorrente: ${campaign.name} (${campaign._id})`);
-            await startCampaign(campaign);
-          }
-        }
+      let shouldRunToday = false;
+      
+      if (campaign.schedule.recurrencePattern === 'daily') {
+        shouldRunToday = true;
+        logger.info(`Campanha diária - deve executar todos os dias`);
+      } else if (campaign.schedule.recurrencePattern === 'weekly') {
+        shouldRunToday = campaign.schedule.recurrenceDays && campaign.schedule.recurrenceDays.includes(currentDayOfWeek);
+        logger.info(`Campanha semanal - dias configurados: ${campaign.schedule.recurrenceDays?.join(', ')}, hoje (${currentDayOfWeek}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
+      } else if (campaign.schedule.recurrencePattern === 'monthly') {
+        // Verificar se é o mesmo dia do mês
+        const campaignDay = campaign.schedule.startAt ? new Date(campaign.schedule.startAt).getDate() : now.getDate();
+        shouldRunToday = now.getDate() === campaignDay;
+        logger.info(`Campanha mensal - dia configurado: ${campaignDay}, hoje (${now.getDate()}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
       }
+      
+      if (!shouldRunToday) {
+        logger.info(`Campanha ${campaign._id} não será executada hoje`);
+        continue;
+      }
+      
+      // Verificar se é hora de execução (com tolerância de 5 minutos)
+      const targetTime = campaign.schedule.recurrenceTime || '09:00';
+      const [targetHour, targetMinute] = targetTime.split(':').map(Number);
+      
+      logger.info(`Horário configurado: ${targetTime}, Horário atual: ${currentTime}`);
+      
+      // Criar objetos Date para comparação precisa
+      const targetDate = new Date(now);
+      targetDate.setHours(targetHour, targetMinute, 0, 0);
+      
+      // Calcular diferença em minutos
+      const timeDiffMinutes = Math.abs(now - targetDate) / (1000 * 60);
+      
+      logger.info(`Diferença de tempo: ${timeDiffMinutes.toFixed(2)} minutos`);
+      
+      if (timeDiffMinutes > 5) {
+        logger.info(`Campanha ${campaign._id} não será executada agora (fora da janela de 5 minutos)`);
+        continue;
+      }
+      
+      logger.info(`Horário correto para execução da campanha ${campaign._id}`);
+      
+      // Verificar se já foi executada hoje
+      const today = new Date(now);
+      today.setHours(0, 0, 0, 0);
+      
+      logger.info(`Verificando se a campanha já foi executada hoje (após ${today.toISOString()})`);
+      
+      const lastRun = await Message.findOne({
+        campaignId: campaign._id,
+        createdAt: { $gte: today }
+      });
+      
+      if (lastRun) {
+        logger.info(`Campanha ${campaign._id} JÁ foi executada hoje (${lastRun.createdAt.toISOString()}), pulando...`);
+        continue;
+      }
+      
+      logger.info(`Campanha ${campaign._id} NÃO foi executada hoje, iniciando agora...`);
+      await startCampaign(campaign);
+      logger.info(`Campanha recorrente ${campaign._id} iniciada com sucesso!`);
     }
+    
+    logger.info(`=== VERIFICAÇÃO DE CAMPANHAS RECORRENTES CONCLUÍDA ===\n`);
   } catch (error) {
     logger.error('Erro ao processar campanhas recorrentes:', error);
+    logger.error(`Stack trace: ${error.stack}`);
   }
 };
 
