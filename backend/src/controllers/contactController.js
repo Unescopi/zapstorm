@@ -49,7 +49,7 @@ exports.getContacts = async (req, res) => {
     
     // Buscar contatos com paginação
     const contacts = await Contact.find(query)
-      .sort({ createdAt: -1 })
+      .sort({ name: 1 }) // Ordenar por nome de A-Z (ascendente)
       .skip((page - 1) * limit)
       .limit(limit);
     
@@ -366,7 +366,7 @@ exports.exportCSV = async (req, res) => {
     }
     
     // Buscar todos os contatos que correspondem aos filtros
-    const contacts = await Contact.find(query).sort({ createdAt: -1 });
+    const contacts = await Contact.find(query).sort({ name: 1 });
     
     if (contacts.length === 0) {
       return res.status(404).json({
