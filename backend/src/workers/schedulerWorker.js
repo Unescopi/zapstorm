@@ -150,23 +150,25 @@ const processRecurringCampaigns = async () => {
   // Obter a data atual em UTC
   const nowUtc = new Date();
   
-  // Obter a data atual no fuso horário local (Brasil)
-  // Cria data no fuso horário local
-  const nowLocal = new Date();
+  // Ajustar manualmente para o fuso horário do Brasil (GMT-3 = -180 minutos)
+  // Contêineres Docker normalmente usam UTC por padrão
+  const BRAZIL_TIMEZONE_OFFSET = -180; // minutos (GMT-3)
   
-  // Calcular o offset do fuso horário local em minutos
-  const timezoneOffsetMinutes = nowLocal.getTimezoneOffset();
+  // Criar uma data ajustada para o fuso horário do Brasil
+  const nowBrazil = new Date(nowUtc.getTime() + (BRAZIL_TIMEZONE_OFFSET * 60000));
   
-  const currentDayOfWeek = nowLocal.getDay(); // 0 (Domingo) a 6 (Sábado)
-  const currentHour = nowLocal.getHours();
-  const currentMinute = nowLocal.getMinutes();
+  const currentDayOfWeek = nowBrazil.getUTCDay(); // 0 (Domingo) a 6 (Sábado)
+  const currentHour = nowBrazil.getUTCHours();
+  const currentMinute = nowBrazil.getUTCMinutes();
   const currentTime = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
+  
+  // Formatar data e hora para exibição em logs (no formato do Brasil)
+  const brazilDateTimeString = nowBrazil.toISOString().replace('T', ' ').substring(0, 19) + ' GMT-3';
   
   logger.info(`=== VERIFICANDO CAMPANHAS RECORRENTES ===`);
   logger.info(`Data e hora UTC: ${nowUtc.toISOString()}`);
-  logger.info(`Data e hora local: ${nowLocal.toLocaleString()}`);
-  logger.info(`Fuso horário offset: ${timezoneOffsetMinutes} minutos`);
-  logger.info(`Dia da semana: ${currentDayOfWeek}, Hora local atual: ${currentTime}`);
+  logger.info(`Data e hora Brasil (GMT-3): ${brazilDateTimeString}`);
+  logger.info(`Dia da semana: ${currentDayOfWeek}, Hora Brasil: ${currentTime}`);
   
   try {
     // Buscar campanhas recorrentes ativas
@@ -192,9 +194,9 @@ const processRecurringCampaigns = async () => {
         logger.info(`Campanha semanal - dias configurados: ${campaign.schedule.recurrenceDays?.join(', ')}, hoje (${currentDayOfWeek}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
       } else if (campaign.schedule.recurrencePattern === 'monthly') {
         // Verificar se é o mesmo dia do mês
-        const campaignDay = campaign.schedule.startAt ? new Date(campaign.schedule.startAt).getDate() : nowLocal.getDate();
-        shouldRunToday = nowLocal.getDate() === campaignDay;
-        logger.info(`Campanha mensal - dia configurado: ${campaignDay}, hoje (${nowLocal.getDate()}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
+        const campaignDay = campaign.schedule.startAt ? new Date(campaign.schedule.startAt).getDate() : nowBrazil.getUTCDate();
+        shouldRunToday = nowBrazil.getUTCDate() === campaignDay;
+        logger.info(`Campanha mensal - dia configurado: ${campaignDay}, hoje (${nowBrazil.getUTCDate()}): ${shouldRunToday ? 'SIM' : 'NÃO'}`);
       }
       
       if (!shouldRunToday) {
@@ -206,20 +208,38 @@ const processRecurringCampaigns = async () => {
       const targetTime = campaign.schedule.recurrenceTime || '09:00';
       const [targetHour, targetMinute] = targetTime.split(':').map(Number);
       
-      logger.info(`Horário configurado: ${targetTime}, Horário local atual: ${currentTime}`);
+      logger.info(`Horário configurado (Brasil): ${targetTime}, Horário atual (Brasil): ${currentTime}`);
       
-      // Criar um objeto Date com a data atual, mas com a hora configurada para comparação
-      const targetDate = new Date(nowLocal);
-      targetDate.setHours(targetHour, targetMinute, 0, 0);
+      // Criar uma data-hora alvo no fuso do Brasil para hoje
+      // Usamos UTC para garantir que não haverá ajustes automáticos de fuso
+      const targetDate = new Date(Date.UTC(
+        nowBrazil.getUTCFullYear(),
+        nowBrazil.getUTCMonth(),
+        nowBrazil.getUTCDate(),
+        targetHour,
+        targetMinute,
+        0
+      ));
       
-      // Criar um objeto Date com a data e hora atual para comparação
-      const currentDate = new Date(nowLocal);
+      // Data-hora atual no fuso do Brasil em UTC
+      const currentDate = new Date(Date.UTC(
+        nowBrazil.getUTCFullYear(),
+        nowBrazil.getUTCMonth(),
+        nowBrazil.getUTCDate(),
+        currentHour,
+        currentMinute,
+        0
+      ));
       
       // Calcular diferença em minutos
       const timeDiffMinutes = Math.abs(currentDate - targetDate) / (1000 * 60);
       
-      logger.info(`Data/hora alvo: ${targetDate.toLocaleString()}`);
-      logger.info(`Data/hora atual: ${currentDate.toLocaleString()}`);
+      // Formatar datas para exibição em logs (no formato do Brasil)
+      const targetDateFormatted = `${targetDate.getUTCFullYear()}-${(targetDate.getUTCMonth()+1).toString().padStart(2, '0')}-${targetDate.getUTCDate().toString().padStart(2, '0')} ${targetHour.toString().padStart(2, '0')}:${targetMinute.toString().padStart(2, '0')}:00 GMT-3`;
+      const currentDateFormatted = `${currentDate.getUTCFullYear()}-${(currentDate.getUTCMonth()+1).toString().padStart(2, '0')}-${currentDate.getUTCDate().toString().padStart(2, '0')} ${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}:00 GMT-3`;
+      
+      logger.info(`Hora alvo (Brasil): ${targetDateFormatted}`);
+      logger.info(`Hora atual (Brasil): ${currentDateFormatted}`);
       logger.info(`Diferença de tempo: ${timeDiffMinutes.toFixed(2)} minutos`);
       
       if (timeDiffMinutes > 5) {
@@ -230,14 +250,22 @@ const processRecurringCampaigns = async () => {
       logger.info(`Horário correto para execução da campanha ${campaign._id}`);
       
       // Verificar se já foi executada hoje
-      const today = new Date(nowLocal);
-      today.setHours(0, 0, 0, 0);
+      // Criar data do início do dia de hoje no fuso do Brasil
+      const todayStart = new Date(Date.UTC(
+        nowBrazil.getUTCFullYear(),
+        nowBrazil.getUTCMonth(),
+        nowBrazil.getUTCDate(),
+        0, 0, 0
+      ));
       
-      logger.info(`Verificando se a campanha já foi executada hoje (após ${today.toISOString()})`);
+      // Converter para timestamp
+      const todayStartTimestamp = todayStart.getTime();
+      
+      logger.info(`Verificando se a campanha já foi executada hoje (após ${new Date(todayStartTimestamp).toISOString()})`);
       
       const lastRun = await Message.findOne({
         campaignId: campaign._id,
-        createdAt: { $gte: today }
+        createdAt: { $gte: new Date(todayStartTimestamp) }
       });
       
       if (lastRun) {
