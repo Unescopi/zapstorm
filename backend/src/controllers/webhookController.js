@@ -3,71 +3,6 @@ const logger = require('../utils/logger');
 const EvolutionApiService = require('../services/evolutionApiService');
 
 /**
- * Processa webhooks da API Evolution
- * Esta função recebe eventos e encaminha para o processador apropriado
- */
-exports.processWebhook = async (req, res) => {
-  try {
-    const { instanceName } = req.params;
-    const webhook = req.body;
-    const event = req.headers['x-hub-event'] || webhook.event;
-
-    logger.info(`Webhook recebido para instância ${instanceName}: Evento ${event}`);
-    logger.debug(`Dados do webhook: ${JSON.stringify(webhook)}`);
-
-    // Verificar se a instância existe
-    const instance = await Instance.findOne({ instanceName });
-    if (!instance) {
-      logger.error(`Webhook recebido para instância inexistente: ${instanceName}`);
-      return res.status(404).json({
-        success: false,
-        message: 'Instância não encontrada'
-      });
-    }
-
-    // Processar diferentes tipos de eventos
-    if (event) {
-      switch (event) {
-        case 'MESSAGES_UPSERT':
-          await processMessagesUpsert(webhook, instanceName);
-          break;
-          
-        case 'MESSAGES_UPDATE':
-          await processMessagesUpdate(webhook, instanceName);
-          break;
-        
-        case 'CONNECTION_UPDATE':
-          await processConnectionUpdate(webhook, instanceName);
-          break;
-          
-        case 'SEND_MESSAGE':
-          await processSendMessage(webhook, instanceName);
-          break;
-          
-        default:
-          logger.info(`Evento ${event} recebido, mas não processado especificamente`);
-      }
-    } else {
-      logger.warn(`Webhook sem evento definido: ${JSON.stringify(webhook)}`);
-    }
-
-    // Sempre retornar 200 para confirmar recebimento
-    res.status(200).json({
-      success: true,
-      message: 'Webhook processado com sucesso'
-    });
-  } catch (error) {
-    logger.error('Erro ao processar webhook:', error);
-    
-    // Mesmo com erro, retornar 200 para evitar reenvios
-    res.status(200).json({
-      success: false,
-      message: 'Erro ao processar webhook, mas foi recebido'
-    });
-  }
-};
-
-/**
  * Processa webhooks de mensagens recebidas (MESSAGES_UPSERT)
  */
 const processMessagesUpsert = async (webhook, instanceName) => {
@@ -229,6 +164,71 @@ const processSendMessage = async (webhook, instanceName) => {
     );
   } catch (error) {
     logger.error('Erro ao processar SEND_MESSAGE:', error);
+  }
+};
+
+/**
+ * Processa webhooks da API Evolution
+ * Esta função recebe eventos e encaminha para o processador apropriado
+ */
+exports.processWebhook = async (req, res) => {
+  try {
+    const { instanceName } = req.params;
+    const webhook = req.body;
+    const event = req.headers['x-hub-event'] || webhook.event;
+
+    logger.info(`Webhook recebido para instância ${instanceName}: Evento ${event}`);
+    logger.debug(`Dados do webhook: ${JSON.stringify(webhook)}`);
+
+    // Verificar se a instância existe
+    const instance = await Instance.findOne({ instanceName });
+    if (!instance) {
+      logger.error(`Webhook recebido para instância inexistente: ${instanceName}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+
+    // Processar diferentes tipos de eventos
+    if (event) {
+      switch (event) {
+        case 'MESSAGES_UPSERT':
+          await processMessagesUpsert(webhook, instanceName);
+          break;
+          
+        case 'MESSAGES_UPDATE':
+          await processMessagesUpdate(webhook, instanceName);
+          break;
+        
+        case 'CONNECTION_UPDATE':
+          await processConnectionUpdate(webhook, instanceName);
+          break;
+          
+        case 'SEND_MESSAGE':
+          await processSendMessage(webhook, instanceName);
+          break;
+          
+        default:
+          logger.info(`Evento ${event} recebido, mas não processado especificamente`);
+      }
+    } else {
+      logger.warn(`Webhook sem evento definido: ${JSON.stringify(webhook)}`);
+    }
+
+    // Sempre retornar 200 para confirmar recebimento
+    res.status(200).json({
+      success: true,
+      message: 'Webhook processado com sucesso'
+    });
+  } catch (error) {
+    logger.error('Erro ao processar webhook:', error);
+    
+    // Mesmo com erro, retornar 200 para evitar reenvios
+    res.status(200).json({
+      success: false,
+      message: 'Erro ao processar webhook, mas foi recebido'
+    });
   }
 };
 

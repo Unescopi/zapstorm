@@ -5,7 +5,7 @@ const { requireAuth } = require('../middlewares/authMiddleware');
 
 // Rota para receber webhooks da API Evolution
 // Não usamos middleware de autenticação aqui, pois o webhook é chamado pelo sistema externo
-router.post('/receive/:instanceName', webhookController.processWebhook);
+router.post('/:instanceName', webhookController.processWebhook);
 
 // Rotas para configurar e gerenciar webhooks (protegidas por autenticação)
 router.post('/configure/:instanceName', requireAuth, webhookController.configureWebhook);
