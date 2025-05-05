@@ -514,11 +514,11 @@ const Campaigns: React.FC = () => {
                           arrow
                           placement="top"
                         >
-                          <Chip 
-                            label={statusLabels[campaign.status]} 
-                            color={statusColors[campaign.status] as any} 
-                            size="small" 
-                          />
+                      <Chip 
+                        label={statusLabels[campaign.status]} 
+                        color={statusColors[campaign.status] as any} 
+                        size="small" 
+                      />
                         </Tooltip>
                       ) : (
                         <Chip 

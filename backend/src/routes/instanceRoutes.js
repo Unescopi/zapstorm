@@ -32,4 +32,9 @@ router.post('/:id/logout', instanceController.logoutInstance);
 // Rota para reiniciar instância
 router.post('/:id/restart', instanceController.restartInstance);
 
+// Rotas para gerenciamento de webhooks
+router.route('/:id/webhook')
+  .get(instanceController.getWebhookConfig)
+  .post(instanceController.configureWebhook);
+
 module.exports = router; 

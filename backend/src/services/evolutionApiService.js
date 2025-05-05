@@ -266,6 +266,51 @@ class EvolutionApiService {
       this._handleError(error, 'restartInstance');
     }
   }
+
+  // Configurar webhook para uma instância
+  async configureWebhook(instanceName, webhookConfig) {
+    try {
+      // Validação básica
+      if (!webhookConfig || !webhookConfig.url) {
+        console.error('Erro: URL do webhook não fornecida');
+        logger.error('Erro: URL do webhook não fornecida');
+        throw new Error('URL do webhook não fornecida');
+      }
+
+      // Payload conforme documentação da Evolution API
+      const payload = {
+        url: webhookConfig.url,
+        webhook_by_events: webhookConfig.webhookByEvents || false,
+        webhook_base64: webhookConfig.webhookBase64 || false,
+        events: webhookConfig.events || [
+          "QRCODE_UPDATED",
+          "MESSAGES_UPSERT",
+          "MESSAGES_UPDATE",
+          "MESSAGES_DELETE",
+          "SEND_MESSAGE",
+          "CONNECTION_UPDATE"
+        ]
+      };
+      
+      console.log(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
+      logger.info(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
+      
+      const response = await this.axios.post(`/webhook/instance/${instanceName}`, payload);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'configureWebhook');
+    }
+  }
+
+  // Buscar configuração atual de webhook
+  async fetchWebhook(instanceName) {
+    try {
+      const response = await this.axios.get(`/webhook/find/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'fetchWebhook');
+    }
+  }
 }
 
 module.exports = EvolutionApiService; 

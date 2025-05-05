@@ -45,13 +45,50 @@ const instanceSchema = new mongoose.Schema({
     type: Date
   },
   webhook: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
     url: {
       type: String,
       trim: true
     },
+    webhookByEvents: {
+      type: Boolean,
+      default: false,
+      description: 'Gerar URLs específicas para cada evento'
+    },
+    webhookBase64: {
+      type: Boolean,
+      default: false,
+      description: 'Enviar mídia em base64'
+    },
     events: [{
       type: String,
-      enum: ['message', 'message-status', 'connection-status']
+      enum: [
+        // Eventos padrão do sistema atual
+        'message', 'message-status', 'connection-status',
+        // Eventos da Evolution API
+        'QRCODE_UPDATED',
+        'CONNECTION_UPDATE',
+        'MESSAGES_SET',
+        'MESSAGES_UPSERT',
+        'MESSAGES_UPDATE',
+        'MESSAGES_DELETE',
+        'SEND_MESSAGE',
+        'CONTACTS_SET',
+        'CONTACTS_UPSERT',
+        'CONTACTS_UPDATE',
+        'PRESENCE_UPDATE',
+        'CHATS_SET',
+        'CHATS_UPDATE',
+        'CHATS_UPSERT',
+        'CHATS_DELETE',
+        'GROUPS_UPSERT',
+        'GROUPS_UPDATE',
+        'GROUP_PARTICIPANTS_UPDATE',
+        'NEW_TOKEN'
+      ]
     }]
   },
   throttling: {

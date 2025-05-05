@@ -500,4 +500,137 @@ exports.restartInstance = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+// Configurar webhook para uma instância
+exports.configureWebhook = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled, url, webhookByEvents, webhookBase64, events } = req.body;
+
+    // Verificar se a instância existe
+    const instance = await Instance.findById(id);
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+
+    // Validar URL do webhook se estiver habilitado
+    if (enabled && !url) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL do webhook é obrigatória quando habilitado'
+      });
+    }
+
+    // Atualizar configuração de webhook no banco de dados
+    instance.webhook = {
+      enabled: enabled || false,
+      url: url || '',
+      webhookByEvents: webhookByEvents || false,
+      webhookBase64: webhookBase64 || false,
+      events: events || []
+    };
+
+    await instance.save();
+
+    // Se habilitado, configurar webhook na API Evolution
+    if (enabled && url) {
+      try {
+        const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+        
+        // Preparar configuração para a API Evolution
+        const webhookConfig = {
+          url,
+          webhookByEvents: webhookByEvents || false,
+          webhookBase64: webhookBase64 || false,
+          events: events || [
+            "QRCODE_UPDATED",
+            "MESSAGES_UPSERT",
+            "MESSAGES_UPDATE",
+            "MESSAGES_DELETE",
+            "SEND_MESSAGE",
+            "CONNECTION_UPDATE"
+          ]
+        };
+
+        const response = await evolutionApi.configureWebhook(instance.instanceName, webhookConfig);
+        
+        logger.info(`Webhook configurado com sucesso na API Evolution: ${JSON.stringify(response)}`);
+      } catch (apiError) {
+        logger.error(`Erro ao configurar webhook na API Evolution: ${apiError.message}`);
+        return res.status(500).json({
+          success: false,
+          message: 'Erro ao configurar webhook na API Evolution',
+          error: process.env.NODE_ENV === 'development' ? apiError.message : undefined
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Configuração de webhook atualizada com sucesso',
+      data: instance.webhook
+    });
+  } catch (error) {
+    logger.error('Erro ao configurar webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao configurar webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Buscar configuração de webhook atual
+exports.getWebhookConfig = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verificar se a instância existe
+    const instance = await Instance.findById(id);
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+
+    // Verificar configuração atual na API Evolution
+    try {
+      const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+      const webhookStatus = await evolutionApi.fetchWebhook(instance.instanceName);
+      
+      // Se houver resposta válida da API, atualizar o banco de dados
+      if (webhookStatus) {
+        instance.webhook = {
+          enabled: webhookStatus.enabled || false,
+          url: webhookStatus.url || '',
+          webhookByEvents: webhookStatus.webhookByEvents || webhookStatus.webhook_by_events || false,
+          webhookBase64: webhookStatus.webhookBase64 || webhookStatus.webhook_base64 || false,
+          events: webhookStatus.events || []
+        };
+
+        await instance.save();
+        logger.info(`Configuração de webhook atualizada do servidor: ${JSON.stringify(instance.webhook)}`);
+      }
+    } catch (apiError) {
+      logger.error(`Erro ao buscar webhook na API Evolution: ${apiError.message}`);
+      // Continuar mesmo com erro, retornando a configuração salva no banco
+    }
+
+    res.status(200).json({
+      success: true,
+      data: instance.webhook
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar configuração de webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar configuração de webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 }; 

@@ -38,6 +38,25 @@ const config = {
   upload: {
     maxFileSize: 10 * 1024 * 1024, // 10MB
     directory: process.env.UPLOAD_DIR || 'uploads/'
+  },
+  
+  // Configurações de webhook global da Evolution API
+  webhook: {
+    // Webhook global para todas as instâncias (configurado no .env)
+    global: {
+      url: process.env.WEBHOOK_GLOBAL_URL || '',
+      enabled: process.env.WEBHOOK_GLOBAL_ENABLED === 'true' || false,
+      webhookByEvents: process.env.WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS === 'true' || false
+    },
+    // Eventos padrão para novos webhooks
+    defaultEvents: [
+      "QRCODE_UPDATED",
+      "MESSAGES_UPSERT",
+      "MESSAGES_UPDATE", 
+      "MESSAGES_DELETE",
+      "SEND_MESSAGE",
+      "CONNECTION_UPDATE"
+    ]
   }
 };
 
