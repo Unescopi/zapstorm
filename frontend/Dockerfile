@@ -24,8 +24,10 @@ FROM nginx:alpine
 # Copiar configuração do nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copiar script de entrypoint
-COPY --chmod=755 ./docker-entrypoint.sh /
+# Copiar e tornar executáveis os scripts
+COPY fix-api-url.sh /usr/local/bin/fix-api-url.sh
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/fix-api-url.sh /usr/local/bin/docker-entrypoint.sh
 
 # Copiar arquivos construídos da etapa anterior
 COPY --from=build /app/dist /usr/share/nginx/html
@@ -34,5 +36,5 @@ COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 
 # Iniciar nginx com o script de entrypoint
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"] 
