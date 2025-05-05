@@ -20,15 +20,7 @@ import {
   Chip,
   Avatar,
   Snackbar,
-  Alert,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  ListItemText,
-  Checkbox,
-  OutlinedInput,
-  SelectChangeEvent
+  Alert
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -36,7 +28,6 @@ import QrCode2Icon from '@mui/icons-material/QrCode2';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import WebhookIcon from '@mui/icons-material/Webhook';
 import api from '../../services/api';
 
 // Definição do tipo para setTimeout/setInterval
@@ -50,8 +41,6 @@ type Instance = {
   lastConnection?: string;
   phone?: string;
   createdAt: string;
-  webhookUrl?: string;
-  webhookEnabled?: boolean;
 };
 
 const statusColors = {
@@ -74,38 +63,18 @@ const Instances: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [qrCodeDialogOpen, setQrCodeDialogOpen] = useState(false);
-  const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null);
   const [formData, setFormData] = useState({
     instanceName: ''
   });
-  const [webhookData, setWebhookData] = useState({
-    webhookUrl: '',
-    events: [] as string[]
-  });
   const [pollingInstance, setPollingInstance] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   const [syncLoading, setSyncLoading] = useState(false);
-  const [webhookLoading, setWebhookLoading] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
     severity: 'success' as 'success' | 'error' | 'info' | 'warning'
   });
-
-  // Lista de eventos disponíveis
-  const availableEvents = [
-    "MESSAGES_UPSERT",
-    "MESSAGES_UPDATE",
-    "MESSAGES_DELETE",
-    "SEND_MESSAGE",
-    "CONNECTION_UPDATE",
-    "CONTACTS_SET",
-    "CONTACTS_UPDATE",
-    "PRESENCE_UPDATE",
-    "CHATS_SET",
-    "CHATS_UPDATE"
-  ];
 
   useEffect(() => {
     loadInstances();
@@ -320,75 +289,6 @@ const Instances: React.FC = () => {
     loadInstances();
   };
 
-  const handleOpenWebhookDialog = async (instance: Instance) => {
-    setSelectedInstance(instance);
-    setWebhookLoading(true);
-    setWebhookDialogOpen(true);
-    
-    try {
-      // Carregar configuração atual de webhook
-      const response = await api.get(`/instances/${instance._id}/webhook`);
-      if (response.data.success && response.data.data) {
-        const webhookInfo = response.data.data;
-        setWebhookData({
-          webhookUrl: webhookInfo.url || '',
-          events: webhookInfo.events || []
-        });
-      } else {
-        // Sem configuração de webhook, usar padrões
-        setWebhookData({
-          webhookUrl: instance.webhookUrl || '',
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "MESSAGES_DELETE", "SEND_MESSAGE", "CONNECTION_UPDATE"]
-        });
-      }
-    } catch (error) {
-      console.error('Erro ao carregar configuração de webhook:', error);
-      showSnackbar('Erro ao carregar configuração de webhook', 'error');
-    } finally {
-      setWebhookLoading(false);
-    }
-  };
-  
-  const handleWebhookInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setWebhookData({
-      ...webhookData,
-      [name]: value
-    });
-  };
-  
-  const handleEventsChange = (event: SelectChangeEvent<string[]>) => {
-    setWebhookData({
-      ...webhookData,
-      events: event.target.value as string[]
-    });
-  };
-  
-  const handleSaveWebhook = async () => {
-    if (!selectedInstance) return;
-    
-    setWebhookLoading(true);
-    try {
-      const response = await api.post(`/instances/${selectedInstance._id}/webhook`, {
-        webhookUrl: webhookData.webhookUrl,
-        events: webhookData.events
-      });
-      
-      if (response.data.success) {
-        showSnackbar('Webhook configurado com sucesso', 'success');
-        setWebhookDialogOpen(false);
-        loadInstances();
-      } else {
-        showSnackbar('Erro ao configurar webhook', 'error');
-      }
-    } catch (error) {
-      console.error('Erro ao configurar webhook:', error);
-      showSnackbar('Erro ao configurar webhook', 'error');
-    } finally {
-      setWebhookLoading(false);
-    }
-  };
-
   return (
     <Box p={3}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
@@ -495,16 +395,6 @@ const Instances: React.FC = () => {
                       </IconButton>
                       
                       <IconButton 
-                        color="success" 
-                        size="small"
-                        onClick={() => handleOpenWebhookDialog(instance)}
-                        disabled={refreshing[instance._id]}
-                        title="Configurar Webhook"
-                      >
-                        <WebhookIcon fontSize="small" />
-                      </IconButton>
-                      
-                      <IconButton 
                         color="error" 
                         size="small"
                         onClick={() => confirmDelete(instance)}
@@ -602,69 +492,6 @@ const Instances: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleQrCodeClose}>Fechar</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Adicione o diálogo de Webhook */}
-      <Dialog open={webhookDialogOpen} onClose={() => setWebhookDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Configurar Webhook - {selectedInstance?.instanceName}</DialogTitle>
-        <DialogContent>
-          {webhookLoading ? (
-            <Box display="flex" justifyContent="center" my={4}>
-              <CircularProgress />
-            </Box>
-          ) : (
-            <Box mt={2} display="flex" flexDirection="column" gap={3}>
-              <Typography variant="body2" color="text.secondary">
-                Configure um webhook para receber eventos em tempo real da instância de WhatsApp.
-                O webhook deve estar acessível publicamente para que a Evolution API possa enviar os eventos.
-              </Typography>
-              
-              <TextField
-                fullWidth
-                label="URL do Webhook"
-                name="webhookUrl"
-                value={webhookData.webhookUrl}
-                onChange={handleWebhookInputChange}
-                required
-                helperText="Ex: https://seu-dominio.com/api/webhook/nome-da-instancia"
-              />
-              
-              <FormControl fullWidth>
-                <InputLabel id="events-label">Eventos</InputLabel>
-                <Select
-                  labelId="events-label"
-                  multiple
-                  value={webhookData.events}
-                  onChange={handleEventsChange}
-                  input={<OutlinedInput label="Eventos" />}
-                  renderValue={(selected) => (selected as string[]).join(', ')}
-                >
-                  {availableEvents.map((event) => (
-                    <MenuItem key={event} value={event}>
-                      <Checkbox checked={webhookData.events.indexOf(event) > -1} />
-                      <ListItemText primary={event} />
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              
-              <Typography variant="caption" color="text.secondary">
-                Eventos recomendados: MESSAGES_UPSERT, MESSAGES_UPDATE, MESSAGES_DELETE, SEND_MESSAGE, CONNECTION_UPDATE
-              </Typography>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setWebhookDialogOpen(false)}>Cancelar</Button>
-          <Button 
-            onClick={handleSaveWebhook} 
-            variant="contained" 
-            color="primary"
-            disabled={!webhookData.webhookUrl || webhookLoading}
-          >
-            Salvar
-          </Button>
         </DialogActions>
       </Dialog>
 

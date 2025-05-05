@@ -3,19 +3,7 @@ const mongoose = require('mongoose');
 const alertSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: [
-      'campaign_failure', 
-      'connection_lost', 
-      'high_failure_rate', 
-      'system',
-      'webhook_event',
-      'connection_update',
-      'messages_received',
-      'message_sent',
-      'messages_status_update',
-      'messages_deleted',
-      'new_contact'
-    ],
+    enum: ['campaign_failure', 'connection_lost', 'high_failure_rate', 'system'],
     required: true
   },
   level: {
@@ -34,7 +22,7 @@ const alertSchema = new mongoose.Schema({
   relatedTo: {
     type: {
       type: String,
-      enum: ['campaign', 'instance', 'system', 'other', 'contact']
+      enum: ['campaign', 'instance', 'system', 'other']
     },
     id: {
       type: mongoose.Schema.Types.ObjectId,

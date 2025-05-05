@@ -32,11 +32,4 @@ router.post('/:id/logout', instanceController.logoutInstance);
 // Rota para reiniciar instância
 router.post('/:id/restart', instanceController.restartInstance);
 
-// Rotas para gerenciamento de webhook
-router.post('/:id/webhook', instanceController.setWebhook);
-router.get('/:id/webhook', instanceController.getWebhookStatus);
-
-// Rota para obter QR Code
-router.get('/:id/qrcode', instanceController.getQrCode);
-
 module.exports = router; 
