@@ -273,6 +273,11 @@ class EvolutionApiService {
       this._handleError(error, 'getWebhook');
     }
   }
+  
+  // Obter status do webhook (alias para getWebhook para compatibilidade)
+  async getWebhookStatus(instanceName) {
+    return this.getWebhook(instanceName);
+  }
 
   // Criar nova instância
   async createInstance(instanceName) {
@@ -305,6 +310,16 @@ class EvolutionApiService {
       return response.data;
     } catch (error) {
       this._handleError(error, 'restartInstance');
+    }
+  }
+  
+  // Obter QR Code da instância
+  async getQrCode(instanceName) {
+    try {
+      const response = await this.axios.get(`/instance/qrcode/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'getQrCode');
     }
   }
 }

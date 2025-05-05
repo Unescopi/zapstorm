@@ -236,24 +236,19 @@ exports.setWebhook = async (req, res) => {
       const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
       const response = await evolutionApi.setWebhook(instance.instanceName, webhookUrl, events);
       
-      // Atualizar instância com URL do webhook
-      await Instance.findByIdAndUpdate(id, {
-        webhookUrl,
-        webhookEnabled: true,
-        lastUpdated: Date.now()
-      });
+      // Atualizar a instância com a URL do webhook
+      await Instance.findByIdAndUpdate(id, { webhookUrl });
       
       res.status(200).json({
         success: true,
-        message: 'Webhook configurado com sucesso',
         data: response
       });
     } catch (apiError) {
-      logger.error(`Erro ao configurar webhook na Evolution API: ${apiError.message}`);
-      res.status(500).json({
+      logger.error(`Erro ao configurar webhook na API Evolution: ${apiError.message}`);
+      return res.status(500).json({
         success: false,
-        message: 'Erro ao configurar webhook na Evolution API',
-        error: process.env.NODE_ENV === 'development' ? apiError.message : undefined
+        message: 'Erro ao configurar webhook na API Evolution',
+        error: apiError.message
       });
     }
   } catch (error) {
@@ -266,7 +261,7 @@ exports.setWebhook = async (req, res) => {
   }
 };
 
-// Verificar status do webhook
+// Obter status do webhook de uma instância
 exports.getWebhookStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -280,28 +275,28 @@ exports.getWebhookStatus = async (req, res) => {
       });
     }
     
-    // Buscar informações do webhook na API Evolution
+    // Obter status do webhook da API Evolution
     try {
       const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
-      const webhookInfo = await evolutionApi.getWebhook(instance.instanceName);
+      const response = await evolutionApi.getWebhookStatus(instance.instanceName);
       
       res.status(200).json({
         success: true,
-        data: webhookInfo
+        data: response
       });
     } catch (apiError) {
-      logger.error(`Erro ao buscar status do webhook: ${apiError.message}`);
-      res.status(500).json({
+      logger.error(`Erro ao obter status do webhook na API Evolution: ${apiError.message}`);
+      return res.status(500).json({
         success: false,
-        message: 'Erro ao buscar status do webhook',
-        error: process.env.NODE_ENV === 'development' ? apiError.message : undefined
+        message: 'Erro ao obter status do webhook na API Evolution',
+        error: apiError.message
       });
     }
   } catch (error) {
-    logger.error('Erro ao buscar status do webhook:', error);
+    logger.error('Erro ao obter status do webhook:', error);
     res.status(500).json({
       success: false,
-      message: 'Erro ao buscar status do webhook',
+      message: 'Erro ao obter status do webhook',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -596,6 +591,45 @@ exports.restartInstance = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erro ao reiniciar instância',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Obter QR Code para uma instância
+exports.getQrCode = async (req, res) => {
+  try {
+    const instance = await Instance.findById(req.params.id);
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    // Chamar API Evolution para obter QR Code
+    try {
+      const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+      const response = await evolutionApi.getQrCode(instance.instanceName);
+      
+      res.status(200).json({
+        success: true,
+        data: response
+      });
+    } catch (apiError) {
+      logger.error(`Erro ao obter QR Code da instância na API Evolution: ${apiError.message}`);
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao obter QR Code da instância na API Evolution',
+        error: apiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Erro ao obter QR Code da instância:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao obter QR Code da instância',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
