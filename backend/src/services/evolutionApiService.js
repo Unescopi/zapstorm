@@ -266,6 +266,25 @@ class EvolutionApiService {
       this._handleError(error, 'restartInstance');
     }
   }
+
+  // Métodos para webhooks
+  async setWebhook(instanceName, webhookData) {
+    try {
+      const response = await this.axios.post(`/webhook/set/${instanceName}`, webhookData);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'setWebhook');
+    }
+  }
+
+  async findWebhook(instanceName) {
+    try {
+      const response = await this.axios.get(`/webhook/find/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'findWebhook');
+    }
+  }
 }
 
 module.exports = EvolutionApiService; 

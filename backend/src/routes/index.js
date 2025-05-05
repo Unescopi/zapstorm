@@ -12,6 +12,8 @@ const campaignRoutes = require('./campaignRoutes');
 // Removendo a rota de mensagens que não é necessária
 // const messageRoutes = require('./messageRoutes');
 const healthRoutes = require('./healthRoutes');
+const alertRoutes = require('./alertRoutes');
+const settingsRoutes = require('./settingsRoutes');
 
 // Exportar função para configurar rotas
 module.exports = (app) => {
@@ -30,6 +32,8 @@ module.exports = (app) => {
   app.use('/contacts', contactRoutes);
   app.use('/templates', templateRoutes);
   app.use('/campaigns', campaignRoutes);
+  app.use('/alerts', alertRoutes);
+  app.use('/settings', settingsRoutes);
   // Removendo a rota de mensagens
   // app.use('/messages', messageRoutes);
 }; 

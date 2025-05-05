@@ -23,7 +23,7 @@
   "license": "ISC",
   "dependencies": {
     "amqplib": "^0.10.3",
-    "axios": "^1.6.2",
+    "axios": "^1.9.0",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "csv-parser": "^3.0.0",

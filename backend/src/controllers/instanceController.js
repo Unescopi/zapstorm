@@ -500,4 +500,163 @@ exports.restartInstance = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+// Configurar webhook para uma instância
+exports.configureWebhook = async (req, res) => {
+  try {
+    const instance = await Instance.findById(req.params.id);
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    const { webhookUrl, webhookByEvents, webhookBase64, events } = req.body;
+    
+    if (!webhookUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL do webhook é obrigatória'
+      });
+    }
+    
+    try {
+      // Importar serviço de webhook
+      const webhookService = require('../services/webhookService');
+      
+      // Chamar o serviço para configurar o webhook
+      const response = await webhookService.configureWebhook(
+        instance.instanceName,
+        instance.serverUrl,
+        instance.apiKey,
+        webhookUrl,
+        webhookByEvents || false,
+        webhookBase64 || false,
+        events || []
+      );
+      
+      logger.info(`Webhook configurado com sucesso para instância ${instance.instanceName}`);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Webhook configurado com sucesso',
+        data: response
+      });
+    } catch (apiError) {
+      logger.error(`Erro ao configurar webhook para instância ${instance.instanceName}:`, apiError);
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao configurar webhook',
+        error: apiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Erro ao configurar webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao configurar webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Remover webhook de uma instância
+exports.removeWebhook = async (req, res) => {
+  try {
+    const instance = await Instance.findById(req.params.id);
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    try {
+      // Importar serviço de webhook
+      const webhookService = require('../services/webhookService');
+      
+      // Chamar o serviço para remover o webhook
+      const response = await webhookService.removeWebhook(
+        instance.instanceName,
+        instance.serverUrl,
+        instance.apiKey
+      );
+      
+      logger.info(`Webhook removido com sucesso para instância ${instance.instanceName}`);
+      
+      res.status(200).json({
+        success: true,
+        message: 'Webhook removido com sucesso',
+        data: response
+      });
+    } catch (apiError) {
+      logger.error(`Erro ao remover webhook para instância ${instance.instanceName}:`, apiError);
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao remover webhook',
+        error: apiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Erro ao remover webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao remover webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Verificar status do webhook
+exports.getWebhookStatus = async (req, res) => {
+  try {
+    const instance = await Instance.findById(req.params.id);
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    try {
+      // Importar serviço de webhook
+      const webhookService = require('../services/webhookService');
+      
+      // Chamar o serviço para verificar o webhook
+      const webhookDetails = await webhookService.getWebhookDetails(
+        instance.instanceName,
+        instance.serverUrl,
+        instance.apiKey
+      );
+      
+      logger.info(`Detalhes do webhook obtidos com sucesso para instância ${instance.instanceName}`);
+      
+      res.status(200).json({
+        success: true,
+        data: webhookDetails
+      });
+    } catch (apiError) {
+      logger.error(`Erro ao obter detalhes do webhook para instância ${instance.instanceName}:`, apiError);
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao obter detalhes do webhook',
+        error: apiError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Erro ao obter detalhes do webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao obter detalhes do webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 }; 
