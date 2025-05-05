@@ -14,5 +14,8 @@ export default defineConfig({
   },
   build: {
     minify: true
+  },
+  optimizeDeps: {
+    exclude: ['@mui/icons-material']
   }
 })
