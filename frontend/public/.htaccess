@@ -1,0 +1,25 @@
+# Forçar o tipo de MIME para JavaScript
+<FilesMatch "\.js$">
+    ForceType application/javascript
+    Header set Content-Type application/javascript
+</FilesMatch>
+
+<FilesMatch "\.mjs$">
+    ForceType application/javascript
+    Header set Content-Type application/javascript
+</FilesMatch>
+
+# Forçar navegadores modernos a usar o tipo de MIME correto
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# Redirecionar todas as requisições para o index.html (para SPA)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    RewriteRule ^index\.html$ - [L]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule . /index.html [L]
+</IfModule> 

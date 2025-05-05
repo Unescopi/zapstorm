@@ -19,7 +19,9 @@ export default defineConfig({
         // Forçar todos os chunks de JS a terem a extensão .js
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]'
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+        // Forçar o formato CommonJS em vez de ES modules
+        format: 'cjs'
       }
     }
   },
