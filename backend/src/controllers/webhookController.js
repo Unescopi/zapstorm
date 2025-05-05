@@ -171,7 +171,7 @@ const processSendMessage = async (webhook, instanceName) => {
  * Processa webhooks da API Evolution
  * Esta função recebe eventos e encaminha para o processador apropriado
  */
-exports.processWebhook = async (req, res) => {
+const processWebhook = async (req, res) => {
   try {
     const { instanceName } = req.params;
     const webhook = req.body;
@@ -235,7 +235,7 @@ exports.processWebhook = async (req, res) => {
 /**
  * Configura webhook para uma instância
  */
-exports.configureWebhook = async (req, res) => {
+const configureWebhook = async (req, res) => {
   try {
     const { instanceName } = req.params;
     const { enabled, url, webhookByEvents, events, base64 } = req.body;
@@ -313,7 +313,7 @@ exports.configureWebhook = async (req, res) => {
 /**
  * Obtém configuração de webhook para uma instância
  */
-exports.getWebhookConfig = async (req, res) => {
+const getWebhookConfig = async (req, res) => {
   try {
     const { instanceName } = req.params;
     
@@ -339,4 +339,11 @@ exports.getWebhookConfig = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+// Exportar todas as funções do controlador
+module.exports = {
+  processWebhook,
+  configureWebhook,
+  getWebhookConfig
 }; 
