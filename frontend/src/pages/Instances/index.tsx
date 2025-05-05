@@ -20,7 +20,15 @@ import {
   Chip,
   Avatar,
   Snackbar,
-  Alert
+  Alert,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  ListItemText,
+  Checkbox,
+  OutlinedInput,
+  SelectChangeEvent
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -28,7 +36,7 @@ import QrCode2Icon from '@mui/icons-material/QrCode2';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import SettingsIcon from '@mui/icons-material/Settings';
+import WebhookIcon from '@mui/icons-material/Webhook';
 import api from '../../services/api';
 
 // Definição do tipo para setTimeout/setInterval
@@ -42,6 +50,8 @@ type Instance = {
   lastConnection?: string;
   phone?: string;
   createdAt: string;
+  webhookUrl?: string;
+  webhookEnabled?: boolean;
 };
 
 const statusColors = {
@@ -64,45 +74,37 @@ const Instances: React.FC = () => {
   const [openDialog, setOpenDialog] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [qrCodeDialogOpen, setQrCodeDialogOpen] = useState(false);
+  const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null);
   const [formData, setFormData] = useState({
     instanceName: ''
   });
+  const [webhookData, setWebhookData] = useState({
+    webhookUrl: '',
+    events: [] as string[]
+  });
   const [pollingInstance, setPollingInstance] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
   const [syncLoading, setSyncLoading] = useState(false);
+  const [webhookLoading, setWebhookLoading] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
     severity: 'success' as 'success' | 'error' | 'info' | 'warning'
   });
-  const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
-  const [webhookConfig, setWebhookConfig] = useState({
-    enabled: false,
-    url: '',
-    webhookByEvents: false,
-    webhookBase64: false,
-    events: [] as string[]
-  });
+
+  // Lista de eventos disponíveis
   const availableEvents = [
-    "QRCODE_UPDATED",
-    "CONNECTION_UPDATE",
-    "MESSAGES_SET",
     "MESSAGES_UPSERT",
     "MESSAGES_UPDATE",
     "MESSAGES_DELETE",
     "SEND_MESSAGE",
+    "CONNECTION_UPDATE",
     "CONTACTS_SET",
-    "CONTACTS_UPSERT",
     "CONTACTS_UPDATE",
     "PRESENCE_UPDATE",
     "CHATS_SET",
-    "CHATS_UPDATE",
-    "CHATS_UPSERT",
-    "CHATS_DELETE",
-    "GROUPS_UPSERT",
-    "GROUPS_UPDATE",
-    "GROUP_PARTICIPANTS_UPDATE"
+    "CHATS_UPDATE"
   ];
 
   useEffect(() => {
@@ -318,84 +320,72 @@ const Instances: React.FC = () => {
     loadInstances();
   };
 
-  // Função para abrir o diálogo de configuração de webhook
   const handleOpenWebhookDialog = async (instance: Instance) => {
     setSelectedInstance(instance);
+    setWebhookLoading(true);
+    setWebhookDialogOpen(true);
     
     try {
-      // Carregar configuração atual do webhook
+      // Carregar configuração atual de webhook
       const response = await api.get(`/instances/${instance._id}/webhook`);
-      
-      if (response.data.success) {
-        const webhookData = response.data.data;
-        setWebhookConfig({
-          enabled: webhookData.enabled || false,
-          url: webhookData.url || '',
-          webhookByEvents: webhookData.webhookByEvents || false,
-          webhookBase64: webhookData.webhookBase64 || false,
-          events: webhookData.events || []
+      if (response.data.success && response.data.data) {
+        const webhookInfo = response.data.data;
+        setWebhookData({
+          webhookUrl: webhookInfo.url || '',
+          events: webhookInfo.events || []
         });
       } else {
-        // Configuração padrão se não tiver webhook configurado
-        setWebhookConfig({
-          enabled: false,
-          url: '',
-          webhookByEvents: false,
-          webhookBase64: false,
-          events: []
+        // Sem configuração de webhook, usar padrões
+        setWebhookData({
+          webhookUrl: instance.webhookUrl || '',
+          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "MESSAGES_DELETE", "SEND_MESSAGE", "CONNECTION_UPDATE"]
         });
       }
-      
-      setWebhookDialogOpen(true);
     } catch (error) {
-      console.error('Erro ao carregar configurações do webhook:', error);
-      
-      // Mesmo com erro, abrir o diálogo com configurações padrão
-      setWebhookConfig({
-        enabled: false,
-        url: '',
-        webhookByEvents: false,
-        webhookBase64: false,
-        events: []
-      });
-      setWebhookDialogOpen(true);
+      console.error('Erro ao carregar configuração de webhook:', error);
+      showSnackbar('Erro ao carregar configuração de webhook', 'error');
+    } finally {
+      setWebhookLoading(false);
     }
   };
   
-  // Função para salvar a configuração do webhook
+  const handleWebhookInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setWebhookData({
+      ...webhookData,
+      [name]: value
+    });
+  };
+  
+  const handleEventsChange = (event: SelectChangeEvent<string[]>) => {
+    setWebhookData({
+      ...webhookData,
+      events: event.target.value as string[]
+    });
+  };
+  
   const handleSaveWebhook = async () => {
     if (!selectedInstance) return;
     
+    setWebhookLoading(true);
     try {
-      if (webhookConfig.enabled) {
-        // Configurar webhook
-        const response = await api.post(`/instances/${selectedInstance._id}/webhook`, {
-          webhookUrl: webhookConfig.url,
-          webhookByEvents: webhookConfig.webhookByEvents,
-          webhookBase64: webhookConfig.webhookBase64,
-          events: webhookConfig.events
-        });
-        
-        if (response.data.success) {
-          showSnackbar('Webhook configurado com sucesso', 'success');
-        } else {
-          showSnackbar('Erro ao configurar webhook', 'error');
-        }
-      } else {
-        // Remover webhook
-        const response = await api.delete(`/instances/${selectedInstance._id}/webhook`);
-        
-        if (response.data.success) {
-          showSnackbar('Webhook removido com sucesso', 'success');
-        } else {
-          showSnackbar('Erro ao remover webhook', 'error');
-        }
-      }
+      const response = await api.post(`/instances/${selectedInstance._id}/webhook`, {
+        webhookUrl: webhookData.webhookUrl,
+        events: webhookData.events
+      });
       
-      setWebhookDialogOpen(false);
+      if (response.data.success) {
+        showSnackbar('Webhook configurado com sucesso', 'success');
+        setWebhookDialogOpen(false);
+        loadInstances();
+      } else {
+        showSnackbar('Erro ao configurar webhook', 'error');
+      }
     } catch (error) {
-      console.error('Erro ao salvar configurações do webhook:', error);
-      showSnackbar('Erro ao salvar configurações do webhook', 'error');
+      console.error('Erro ao configurar webhook:', error);
+      showSnackbar('Erro ao configurar webhook', 'error');
+    } finally {
+      setWebhookLoading(false);
     }
   };
 
@@ -505,6 +495,16 @@ const Instances: React.FC = () => {
                       </IconButton>
                       
                       <IconButton 
+                        color="success" 
+                        size="small"
+                        onClick={() => handleOpenWebhookDialog(instance)}
+                        disabled={refreshing[instance._id]}
+                        title="Configurar Webhook"
+                      >
+                        <WebhookIcon fontSize="small" />
+                      </IconButton>
+                      
+                      <IconButton 
                         color="error" 
                         size="small"
                         onClick={() => confirmDelete(instance)}
@@ -512,13 +512,6 @@ const Instances: React.FC = () => {
                         title="Excluir"
                       >
                         <DeleteIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={() => handleOpenWebhookDialog(instance)}
-                        title="Configurar Webhook"
-                      >
-                        <SettingsIcon fontSize="small" />
                       </IconButton>
                     </TableCell>
                   </TableRow>
@@ -612,139 +605,65 @@ const Instances: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Diálogo de configuração de webhook */}
-      <Dialog
-        open={webhookDialogOpen}
-        onClose={() => setWebhookDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          Configurar Webhook para {selectedInstance?.instanceName}
-        </DialogTitle>
+      {/* Adicione o diálogo de Webhook */}
+      <Dialog open={webhookDialogOpen} onClose={() => setWebhookDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Configurar Webhook - {selectedInstance?.instanceName}</DialogTitle>
         <DialogContent>
-          <Box sx={{ p: 1 }}>
-            <Typography variant="body2" gutterBottom>
-              Configure o webhook para receber eventos da API Evolution para esta instância.
-            </Typography>
-
-            <Box display="flex" alignItems="center" mb={2}>
-              <Typography variant="subtitle1" mr={2}>
-                Ativar Webhook:
-              </Typography>
-              <Chip 
-                label={webhookConfig.enabled ? "Ativado" : "Desativado"} 
-                color={webhookConfig.enabled ? "success" : "default"}
-                onClick={() => setWebhookConfig({...webhookConfig, enabled: !webhookConfig.enabled})}
-              />
+          {webhookLoading ? (
+            <Box display="flex" justifyContent="center" my={4}>
+              <CircularProgress />
             </Box>
-            
-            {webhookConfig.enabled && (
-              <>
-                <TextField
-                  fullWidth
-                  label="URL do Webhook"
-                  value={webhookConfig.url}
-                  onChange={(e) => setWebhookConfig({...webhookConfig, url: e.target.value})}
-                  placeholder="https://seu-dominio.com/api/webhook/nome-da-instancia"
-                  margin="normal"
-                  helperText="URL para onde os eventos do WhatsApp serão enviados"
-                  required
-                />
-                
-                <Box display="flex" mt={2} mb={1}>
-                  <Box flex={1} mr={1}>
-                    <Chip
-                      clickable
-                      color={webhookConfig.webhookByEvents ? "primary" : "default"}
-                      label="Webhook por Eventos"
-                      onClick={() => setWebhookConfig({...webhookConfig, webhookByEvents: !webhookConfig.webhookByEvents})}
-                      sx={{ width: '100%' }}
-                    />
-                    <Typography variant="caption" display="block" mt={0.5}>
-                      Criar URLs específicas para cada evento (adiciona /nome-do-evento no final da URL)
-                    </Typography>
-                  </Box>
-                  
-                  <Box flex={1} ml={1}>
-                    <Chip
-                      clickable
-                      color={webhookConfig.webhookBase64 ? "primary" : "default"}
-                      label="Mídia em Base64"
-                      onClick={() => setWebhookConfig({...webhookConfig, webhookBase64: !webhookConfig.webhookBase64})}
-                      sx={{ width: '100%' }}
-                    />
-                    <Typography variant="caption" display="block" mt={0.5}>
-                      Enviar imagens, vídeos e arquivos como base64 no webhook
-                    </Typography>
-                  </Box>
-                </Box>
-                
-                <Typography variant="subtitle1" mt={3} mb={1}>
-                  Eventos a monitorar:
-                </Typography>
-                
-                <Box sx={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: {
-                    xs: '1fr', 
-                    sm: '1fr 1fr', 
-                    md: '1fr 1fr 1fr'
-                  },
-                  gap: 1
-                }}>
+          ) : (
+            <Box mt={2} display="flex" flexDirection="column" gap={3}>
+              <Typography variant="body2" color="text.secondary">
+                Configure um webhook para receber eventos em tempo real da instância de WhatsApp.
+                O webhook deve estar acessível publicamente para que a Evolution API possa enviar os eventos.
+              </Typography>
+              
+              <TextField
+                fullWidth
+                label="URL do Webhook"
+                name="webhookUrl"
+                value={webhookData.webhookUrl}
+                onChange={handleWebhookInputChange}
+                required
+                helperText="Ex: https://seu-dominio.com/api/webhook/nome-da-instancia"
+              />
+              
+              <FormControl fullWidth>
+                <InputLabel id="events-label">Eventos</InputLabel>
+                <Select
+                  labelId="events-label"
+                  multiple
+                  value={webhookData.events}
+                  onChange={handleEventsChange}
+                  input={<OutlinedInput label="Eventos" />}
+                  renderValue={(selected) => (selected as string[]).join(', ')}
+                >
                   {availableEvents.map((event) => (
-                    <Chip
-                      key={event}
-                      label={event}
-                      clickable
-                      color={webhookConfig.events.includes(event) ? "primary" : "default"}
-                      onClick={() => {
-                        if (webhookConfig.events.includes(event)) {
-                          setWebhookConfig({
-                            ...webhookConfig,
-                            events: webhookConfig.events.filter(e => e !== event)
-                          });
-                        } else {
-                          setWebhookConfig({
-                            ...webhookConfig,
-                            events: [...webhookConfig.events, event]
-                          });
-                        }
-                      }}
-                      sx={{ mb: 1 }}
-                    />
+                    <MenuItem key={event} value={event}>
+                      <Checkbox checked={webhookData.events.indexOf(event) > -1} />
+                      <ListItemText primary={event} />
+                    </MenuItem>
                   ))}
-                </Box>
-                
-                <Box display="flex" justifyContent="space-between" mt={2}>
-                  <Button 
-                    variant="outlined"
-                    onClick={() => setWebhookConfig({...webhookConfig, events: []})}
-                  >
-                    Limpar Seleção
-                  </Button>
-                  
-                  <Button 
-                    variant="outlined"
-                    onClick={() => setWebhookConfig({...webhookConfig, events: [...availableEvents]})}
-                  >
-                    Selecionar Todos
-                  </Button>
-                </Box>
-              </>
-            )}
-          </Box>
+                </Select>
+              </FormControl>
+              
+              <Typography variant="caption" color="text.secondary">
+                Eventos recomendados: MESSAGES_UPSERT, MESSAGES_UPDATE, MESSAGES_DELETE, SEND_MESSAGE, CONNECTION_UPDATE
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setWebhookDialogOpen(false)}>Cancelar</Button>
           <Button 
             onClick={handleSaveWebhook} 
-            variant="contained"
+            variant="contained" 
             color="primary"
-            disabled={webhookConfig.enabled && !webhookConfig.url}
+            disabled={!webhookData.webhookUrl || webhookLoading}
           >
-            {webhookConfig.enabled ? 'Salvar Configuração' : 'Remover Webhook'}
+            Salvar
           </Button>
         </DialogActions>
       </Dialog>

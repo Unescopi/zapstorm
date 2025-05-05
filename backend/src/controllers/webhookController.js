@@ -1,21 +1,18 @@
 const { Message, Instance, Campaign, Contact } = require('../models');
 const logger = require('../utils/logger');
-const queueService = require('../services/queueService');
+const EvolutionApiService = require('../services/evolutionApiService');
+const alertService = require('../services/alertService');
 
 /**
  * Processa webhooks da API Evolution
- * Esta função recebe eventos de mensagens, atualizações de status e outros eventos da API Evolution
+ * Esta função recebe eventos como MESSAGE_UPSERT, CONNECTION_UPDATE, etc.
  */
 exports.processWebhook = async (req, res) => {
   try {
     const { instanceName } = req.params;
     const webhook = req.body;
-    
-    // Identificar o tipo de evento baseado no formato do webhook
-    const eventType = determineEventType(webhook);
 
-    logger.info(`Webhook recebido para instância ${instanceName}: Tipo: ${eventType}`);
-    logger.debug(`Conteúdo do webhook: ${JSON.stringify(webhook)}`);
+    logger.info(`Webhook recebido para instância ${instanceName}: ${JSON.stringify(webhook).substring(0, 500)}...`);
 
     // Verificar se a instância existe
     const instance = await Instance.findOne({ instanceName });
@@ -27,70 +24,120 @@ exports.processWebhook = async (req, res) => {
       });
     }
 
-    // Processar o evento com base no tipo identificado
-    switch (eventType) {
-      case 'MESSAGES_UPSERT':
-        await processIncomingMessage(webhook, instance);
-        break;
-      
-      case 'MESSAGES_UPDATE':
-        await processMessageUpdate(webhook, instance);
-        break;
+    // Identificar o tipo de evento
+    // A Evolution API fornece esses dados no webhook
+    let eventProcessed = false;
+    
+    if (webhook.event) {
+      // Eventos no formato antigo (para compatibilidade)
+      switch (webhook.event) {
+        case 'message':
+        case 'MESSAGES_UPSERT':
+          await processMessagesUpsert(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
         
-      case 'CONNECTION_UPDATE':
-        await processConnectionUpdate(webhook, instance);
-        break;
-        
-      case 'QRCODE_UPDATED':
-        await processQrCodeUpdate(webhook, instance);
-        break;
-        
-      case 'SEND_MESSAGE':
-        await processMessageStatus(webhook, instance);
-        break;
-        
-      case 'CONTACTS_UPSERT':
-      case 'CONTACTS_UPDATE':
-        await processContactUpdate(webhook, instance);
-        break;
-        
-      case 'CONTACTS_SET':
-        await processContactsInitialSync(webhook, instance);
-        break;
-        
-      case 'CHATS_SET':
-      case 'CHATS_UPSERT':
-      case 'CHATS_UPDATE':
-        // Implementar conforme necessário
-        logger.info(`Evento ${eventType} recebido, mas não processado ativamente`);
-        break;
-        
-      default:
-        logger.warn(`Tipo de evento não tratado: ${eventType}`);
+        case 'message-status':
+        case 'MESSAGES_UPDATE':
+          await processMessagesUpdate(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'MESSAGES_DELETE':
+          await processMessagesDelete(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'SEND_MESSAGE':
+          await processSendMessage(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'connection-status':
+        case 'CONNECTION_UPDATE':
+          await processConnectionUpdate(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        default:
+          logger.info(`Evento não processado: ${webhook.event}`);
+      }
+    } else if (webhook.type) {
+      // Formato mais recente da Evolution API usa 'type' em vez de 'event'
+      switch (webhook.type) {
+        case 'MESSAGES_UPSERT':
+          await processMessagesUpsert(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'MESSAGES_UPDATE':
+          await processMessagesUpdate(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'MESSAGES_DELETE':
+          await processMessagesDelete(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'SEND_MESSAGE':
+          await processSendMessage(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        case 'CONNECTION_UPDATE':
+          await processConnectionUpdate(webhook, instanceName, instance);
+          eventProcessed = true;
+          break;
+          
+        default:
+          logger.info(`Tipo de evento não processado: ${webhook.type}`);
+      }
     }
 
-    // Publicar evento para outras partes do sistema consumirem, se necessário
-    await queueService.publishEvent({
-      type: 'webhook_received',
-      data: {
-        instanceName,
-        eventType,
-        timestamp: new Date().toISOString(),
-        webhook: webhook
+    // Criar alerta para eventos bem-sucedidos
+    if (eventProcessed) {
+      // Determinar tipo e nível do evento
+      const eventType = webhook.event || webhook.type || 'UNKNOWN';
+      
+      // Determinar se o evento é uma mensagem recebida
+      let isIncomingMessage = false;
+      if ((eventType === 'MESSAGES_UPSERT' || eventType === 'message') && 
+          webhook.messages && webhook.messages.length > 0) {
+        const message = webhook.messages[0];
+        isIncomingMessage = message.key && !message.key.fromMe;
       }
-    });
+      
+      // Se é uma mensagem recebida, criar um alerta
+      if (isIncomingMessage) {
+        await alertService.createAlert(
+          'webhook_event',
+          'info',
+          `Nova mensagem recebida na instância ${instanceName}`,
+          {
+            eventType,
+            instanceName,
+            timestamp: new Date()
+          },
+          {
+            type: 'instance',
+            id: instance._id,
+            name: instance.instanceName
+          }
+        );
+      }
+    }
 
     // Sempre retornar 200 para confirmar recebimento
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
       message: 'Webhook processado com sucesso'
     });
   } catch (error) {
     logger.error('Erro ao processar webhook:', error);
-    logger.error(`Stack trace: ${error.stack}`);
     
     // Mesmo com erro, retornar 200 para evitar reenvios
-    return res.status(200).json({
+    res.status(200).json({
       success: false,
       message: 'Erro ao processar webhook, mas foi recebido'
     });
@@ -98,463 +145,460 @@ exports.processWebhook = async (req, res) => {
 };
 
 /**
- * Determina o tipo de evento com base na estrutura do webhook
- * @param {Object} webhook - O payload do webhook
- * @returns {string} - O tipo de evento identificado
+ * Processa eventos de novas mensagens (MESSAGES_UPSERT)
  */
-function determineEventType(webhook) {
-  // Verificar se o webhook especifica explicitamente o tipo de evento
-  if (webhook.event) {
-    return webhook.event;
-  }
-  
-  // Para webhooks da Evolution API v2+
-  if (webhook.type) {
-    return webhook.type.toUpperCase();
-  }
-  
-  // Se tem mensagem e a mensagem tem um remetente
-  if (webhook.data && webhook.data.key && webhook.data.key.remoteJid) {
-    return 'MESSAGES_UPSERT';
-  }
-  
-  // Se contém status de QR code
-  if (webhook.qrcode || (webhook.data && webhook.data.qrcode)) {
-    return 'QRCODE_UPDATED';
-  }
-  
-  // Se contém informações de estado de conexão
-  if (webhook.state || (webhook.data && webhook.data.state)) {
-    return 'CONNECTION_UPDATE';
-  }
-  
-  // Se contém atualizações de contatos
-  if (webhook.data && webhook.data.contacts) {
-    return 'CONTACTS_UPDATE';
-  }
-  
-  // Evento desconhecido
-  return 'UNKNOWN';
-}
-
-/**
- * Processa mensagens recebidas (MESSAGES_UPSERT)
- */
-async function processIncomingMessage(webhook, instance) {
+const processMessagesUpsert = async (webhook, instanceName, instance) => {
   try {
-    // Extrair dados conforme a estrutura do webhook da Evolution API
-    const messageData = webhook.data || webhook;
+    logger.info(`Processando MESSAGES_UPSERT para instância ${instanceName}`);
     
-    // Ignora se não for uma mensagem recebida
-    if (messageData.key && messageData.key.fromMe) {
-      logger.debug('Ignorando mensagem enviada por nós');
-      return;
-    }
-
-    // Verificar se temos dados suficientes
-    if (!messageData.key || !messageData.key.id) {
-      logger.warn('Mensagem recebida sem ID');
+    const messages = webhook.messages || (webhook.data && webhook.data.messages) || [];
+    
+    if (!messages.length) {
+      logger.warn('Evento MESSAGES_UPSERT sem mensagens');
       return;
     }
     
-    // Extrair informações básicas da mensagem
-    const messageId = messageData.key.id;
-    const sender = messageData.key.remoteJid;
-    const senderName = messageData.pushName || 'Desconhecido';
+    let newContacts = 0;
+    let receivedMessages = 0;
     
-    // Extrair o conteúdo da mensagem
-    let messageContent = '';
-    if (messageData.message) {
-      if (messageData.message.conversation) {
-        messageContent = messageData.message.conversation;
-      } else if (messageData.message.extendedTextMessage) {
-        messageContent = messageData.message.extendedTextMessage.text;
-      } else if (messageData.message.imageMessage) {
-        messageContent = messageData.message.imageMessage.caption || '[Imagem]';
-      } else if (messageData.message.videoMessage) {
-        messageContent = messageData.message.videoMessage.caption || '[Vídeo]';
-      } else if (messageData.message.audioMessage) {
-        messageContent = '[Áudio]';
-      } else if (messageData.message.documentMessage) {
-        messageContent = messageData.message.documentMessage.fileName || '[Documento]';
+    for (const message of messages) {
+      if (!message.key || !message.key.id) {
+        logger.warn('Mensagem sem ID no evento MESSAGES_UPSERT');
+        continue;
       }
-    }
-    
-    logger.info(`Mensagem recebida de ${senderName} (${sender}): ${messageContent.substring(0, 50)}${messageContent.length > 50 ? '...' : ''}`);
-    
-    // Verificar se é uma resposta para uma mensagem que enviamos
-    // Atualizar mensagens em nossa base
-    const updated = await Message.updateMany(
-      { messageId: messageId },
-      { 
-        $set: { 
-          status: 'read',
-          readAt: new Date()
-        } 
+      
+      // Se a mensagem for enviada por nós mesmos, não criar contato
+      if (message.key.fromMe) {
+        logger.info(`Ignorando mensagem própria: ${message.key.id}`);
+        continue;
       }
-    );
-    
-    if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens marcadas como lidas`);
       
-      // Atualizar métricas das campanhas associadas
-      // Buscar mensagens afetadas para saber de quais campanhas são
-      const messages = await Message.find({ messageId: messageId });
-      const campaignIds = [...new Set(messages.map(m => m.campaignId ? m.campaignId.toString() : null).filter(Boolean))];
+      // Mensagem recebida
+      receivedMessages++;
       
-      for (const campaignId of campaignIds) {
-        await Campaign.findByIdAndUpdate(
-          campaignId,
-          { $inc: { 'metrics.read': 1 } }
+      // Extrair número do remetente
+      const sender = message.key.remoteJid.split('@')[0];
+      
+      // Verificar se o contato existe e atualizá-lo ou criá-lo
+      let contact = await Contact.findOne({ phoneNumber: sender });
+      let isNewContact = false;
+      
+      if (!contact) {
+        // Extrair nome do contato se disponível
+        const pushName = message.pushName || '';
+        
+        // Criar contato
+        contact = await Contact.create({
+          phoneNumber: sender,
+          name: pushName,
+          source: 'webhook',
+          lastMessageAt: new Date()
+        });
+        
+        isNewContact = true;
+        newContacts++;
+        
+        logger.info(`Novo contato criado a partir do webhook: ${sender} (${pushName})`);
+      } else {
+        // Atualizar última mensagem
+        await Contact.findByIdAndUpdate(
+          contact._id,
+          { lastMessageAt: new Date() }
+        );
+      }
+      
+      // Verificar se é uma resposta a uma mensagem que enviamos
+      // Nesse caso, podemos registrar a leitura
+      const updated = await Message.updateMany(
+        { messageId: message.key.id },
+        { 
+          $set: { 
+            status: 'read',
+            readAt: new Date()
+          } 
+        }
+      );
+      
+      if (updated.modifiedCount > 0) {
+        logger.info(`${updated.modifiedCount} mensagens marcadas como lidas`);
+        
+        // Atualizar métricas das campanhas associadas
+        const messages = await Message.find({ messageId: message.key.id });
+        const campaignIds = [...new Set(messages.map(m => m.campaignId ? m.campaignId.toString() : null).filter(Boolean))];
+        
+        for (const campaignId of campaignIds) {
+          await Campaign.findByIdAndUpdate(
+            campaignId,
+            { $inc: { 'metrics.read': 1 } }
+          );
+        }
+      }
+      
+      // Criar alerta se é um novo contato
+      if (isNewContact) {
+        await alertService.createAlert(
+          'new_contact',
+          'info',
+          `Novo contato criado: ${contact.name || contact.phoneNumber}`,
+          {
+            contact: {
+              id: contact._id,
+              name: contact.name,
+              phoneNumber: contact.phoneNumber
+            },
+            instanceName
+          },
+          {
+            type: 'instance',
+            id: instance._id,
+            name: instance.instanceName
+          }
         );
       }
     }
     
-    // Verificar se precisamos salvar o contato
-    const phoneNumber = sender.split('@')[0]; // Remover @s.whatsapp.net ou @g.us
-    
-    // Se for um chat pessoal (não um grupo)
-    if (sender.includes('@s.whatsapp.net')) {
-      // Verificar se já temos este contato
-      const existingContact = await Contact.findOne({ 
-        $or: [
-          { phoneNumber },
-          { whatsappId: sender }
-        ]
-      });
-      
-      if (!existingContact) {
-        // Criar novo contato
-        const newContact = new Contact({
-          name: senderName,
-          phoneNumber,
-          whatsappId: sender,
-          source: 'chat',
-          lastMessageAt: new Date()
-        });
-        
-        await newContact.save();
-        logger.info(`Novo contato criado a partir da mensagem: ${senderName} (${phoneNumber})`);
-      } else {
-        // Atualizar contato existente
-        existingContact.lastMessageAt = new Date();
-        
-        // Atualizar nome se necessário
-        if (senderName !== 'Desconhecido' && (!existingContact.name || existingContact.name === 'Desconhecido')) {
-          existingContact.name = senderName;
+    // Criar alerta resumindo as mensagens recebidas se houver alguma
+    if (receivedMessages > 0) {
+      await alertService.createAlert(
+        'messages_received',
+        'info',
+        `${receivedMessages} mensagen(s) recebida(s) na instância ${instanceName}`,
+        {
+          count: receivedMessages,
+          newContacts,
+          instanceName
+        },
+        {
+          type: 'instance',
+          id: instance._id,
+          name: instance.instanceName
         }
-        
-        await existingContact.save();
-        logger.debug(`Contato atualizado: ${existingContact.name} (${phoneNumber})`);
-      }
+      );
     }
   } catch (error) {
-    logger.error('Erro ao processar mensagem recebida:', error);
-    logger.error(`Stack trace: ${error.stack}`);
+    logger.error('Erro ao processar MESSAGES_UPSERT:', error);
   }
-}
+};
 
 /**
- * Processa atualizações de status de mensagens
+ * Processa eventos de atualização de mensagens (MESSAGES_UPDATE)
  */
-async function processMessageStatus(webhook, instance) {
+const processMessagesUpdate = async (webhook, instanceName, instance) => {
   try {
-    // Extrair dados conforme a estrutura do webhook da Evolution API
-    const statusData = webhook.data || webhook;
+    logger.info(`Processando MESSAGES_UPDATE para instância ${instanceName}`);
     
-    // Se não tiver ID da mensagem, não conseguimos processar
-    if (!statusData.id) {
-      logger.warn('Status recebido sem ID de mensagem');
+    const updates = webhook.messages || (webhook.data && webhook.data.messages) || [];
+    
+    if (!updates.length) {
+      logger.warn('Evento MESSAGES_UPDATE sem atualizações');
       return;
     }
     
-    const messageId = statusData.id;
-    const status = statusData.status || statusData.ack || '';
+    let messagesDelivered = 0;
+    let messagesRead = 0;
     
-    let messageStatus;
-    
-    // Mapear status da API para nosso modelo
-    switch (status.toLowerCase()) {
-      case 'sent':
-      case '1':
-        messageStatus = 'sent';
-        break;
-      case 'delivered':
-      case '2':
+    for (const update of updates) {
+      if (!update.key || !update.key.id) {
+        logger.warn('Atualização sem ID no evento MESSAGES_UPDATE');
+        continue;
+      }
+      
+      // Se o status for 2, significa que foi entregue
+      // Se o status for 3, significa que foi lido
+      let messageStatus;
+      let dateField = {};
+      
+      if (update.update && update.update.status === 2) {
         messageStatus = 'delivered';
-        break;
-      case 'read':
-      case '3':
+        dateField.deliveredAt = new Date();
+        messagesDelivered++;
+      } else if (update.update && update.update.status === 3) {
         messageStatus = 'read';
-        break;
-      case 'failed':
-      case 'error':
-      case '0':
-        messageStatus = 'failed';
-        break;
-      default:
-        logger.warn(`Status desconhecido: ${status}`);
-        return;
+        dateField.readAt = new Date();
+        messagesRead++;
+      } else {
+        logger.info(`Status desconhecido ou não relevante: ${update.update?.status}`);
+        continue;
+      }
+      
+      // Atualizar mensagens no banco
+      const updated = await Message.updateMany(
+        { messageId: update.key.id },
+        { 
+          $set: { 
+            status: messageStatus,
+            ...dateField
+          } 
+        }
+      );
+      
+      if (updated.modifiedCount > 0) {
+        logger.info(`${updated.modifiedCount} mensagens atualizadas para status ${messageStatus}`);
+        
+        // Atualizar métricas das campanhas
+        const messages = await Message.find({ messageId: update.key.id });
+        const campaignIds = [...new Set(messages.map(m => m.campaignId ? m.campaignId.toString() : null).filter(Boolean))];
+        
+        for (const campaignId of campaignIds) {
+          // Incrementar campo correspondente nas métricas
+          await Campaign.findByIdAndUpdate(
+            campaignId,
+            { $inc: { [`metrics.${messageStatus}`]: 1 } }
+          );
+        }
+        
+        // Atualizar métricas da instância
+        if (messageStatus === 'delivered' || messageStatus === 'read') {
+          await Instance.findOneAndUpdate(
+            { instanceName },
+            { $inc: { 'metrics.totalDelivered': 1 } }
+          );
+        }
+      }
     }
     
-    // Determinar que campo de data atualizar
-    let dateField = {};
-    if (messageStatus === 'delivered') {
-      dateField.deliveredAt = new Date();
-    } else if (messageStatus === 'read') {
-      dateField.readAt = new Date();
+    // Criar alerta se houver atualizações
+    if (messagesDelivered > 0 || messagesRead > 0) {
+      let message = '';
+      if (messagesDelivered > 0 && messagesRead > 0) {
+        message = `${messagesDelivered} mensagen(s) entregue(s) e ${messagesRead} lida(s) na instância ${instanceName}`;
+      } else if (messagesDelivered > 0) {
+        message = `${messagesDelivered} mensagen(s) entregue(s) na instância ${instanceName}`;
+      } else {
+        message = `${messagesRead} mensagen(s) lida(s) na instância ${instanceName}`;
+      }
+      
+      await alertService.createAlert(
+        'messages_status_update',
+        'info',
+        message,
+        {
+          delivered: messagesDelivered,
+          read: messagesRead,
+          instanceName
+        },
+        {
+          type: 'instance',
+          id: instance._id,
+          name: instance.instanceName
+        }
+      );
+    }
+  } catch (error) {
+    logger.error('Erro ao processar MESSAGES_UPDATE:', error);
+  }
+};
+
+/**
+ * Processa eventos de exclusão de mensagens (MESSAGES_DELETE)
+ */
+const processMessagesDelete = async (webhook, instanceName, instance) => {
+  try {
+    logger.info(`Processando MESSAGES_DELETE para instância ${instanceName}`);
+    
+    const deletedMessages = webhook.messages || (webhook.data && webhook.data.messages) || [];
+    
+    if (!deletedMessages.length) {
+      logger.warn('Evento MESSAGES_DELETE sem mensagens');
+      return;
     }
     
-    // Atualizar mensagens
+    let messagesDeleted = 0;
+    
+    for (const deletedMsg of deletedMessages) {
+      if (!deletedMsg.key || !deletedMsg.key.id) {
+        logger.warn('Mensagem excluída sem ID no evento MESSAGES_DELETE');
+        continue;
+      }
+      
+      // Marcar mensagens como excluídas
+      const updated = await Message.updateMany(
+        { messageId: deletedMsg.key.id },
+        { $set: { isDeleted: true, deletedAt: new Date() } }
+      );
+      
+      if (updated.modifiedCount > 0) {
+        logger.info(`${updated.modifiedCount} mensagens marcadas como excluídas`);
+        messagesDeleted += updated.modifiedCount;
+      }
+    }
+    
+    // Criar alerta se mensagens foram excluídas
+    if (messagesDeleted > 0) {
+      await alertService.createAlert(
+        'messages_deleted',
+        'info',
+        `${messagesDeleted} mensagen(s) excluída(s) na instância ${instanceName}`,
+        {
+          count: messagesDeleted,
+          instanceName
+        },
+        {
+          type: 'instance',
+          id: instance._id,
+          name: instance.instanceName
+        }
+      );
+    }
+  } catch (error) {
+    logger.error('Erro ao processar MESSAGES_DELETE:', error);
+  }
+};
+
+/**
+ * Processa eventos de envio de mensagens (SEND_MESSAGE)
+ */
+const processSendMessage = async (webhook, instanceName, instance) => {
+  try {
+    logger.info(`Processando SEND_MESSAGE para instância ${instanceName}`);
+    
+    const messageData = webhook.message || (webhook.data && webhook.data.message);
+    
+    if (!messageData || !messageData.key || !messageData.key.id) {
+      logger.warn('Evento SEND_MESSAGE sem dados válidos de mensagem');
+      return;
+    }
+    
+    // Atualizar mensagem no banco
+    const messageId = messageData.key.id;
+    
     const updated = await Message.updateMany(
-      { messageId: messageId },
+      { messageId },
       { 
         $set: { 
-          status: messageStatus,
-          ...dateField
+          status: 'sent',
+          sentAt: new Date()
         } 
       }
     );
     
     if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens atualizadas para status ${messageStatus}`);
+      logger.info(`${updated.modifiedCount} mensagens atualizadas para status 'sent'`);
       
       // Atualizar métricas das campanhas
-      const messages = await Message.find({ messageId: messageId });
+      const messages = await Message.find({ messageId });
       const campaignIds = [...new Set(messages.map(m => m.campaignId ? m.campaignId.toString() : null).filter(Boolean))];
       
+      // Determinar para qual campanha a mensagem foi enviada
+      let campaignName = "Desconhecida";
+      if (campaignIds.length > 0) {
+        const campaign = await Campaign.findById(campaignIds[0]);
+        if (campaign) {
+          campaignName = campaign.name;
+        }
+      }
+      
       for (const campaignId of campaignIds) {
-        // Incrementar campo correspondente nas métricas
         await Campaign.findByIdAndUpdate(
           campaignId,
-          { $inc: { [`metrics.${messageStatus}`]: 1 } }
+          { 
+            $inc: { 'metrics.sent': 1, 'metrics.pending': -1 },
+          }
         );
       }
       
       // Atualizar métricas da instância
-      if (messageStatus === 'delivered' || messageStatus === 'read') {
-        await Instance.findByIdAndUpdate(
-          instance._id,
-          { $inc: { 'metrics.totalDelivered': 1 } }
-        );
-      }
+      await Instance.findOneAndUpdate(
+        { instanceName },
+        { $inc: { 'metrics.totalSent': 1 } }
+      );
+      
+      // Criar alerta de mensagem enviada
+      await alertService.createAlert(
+        'message_sent',
+        'info',
+        `Mensagem enviada pela instância ${instanceName}`,
+        {
+          messageId,
+          campaignIds,
+          campaignName,
+          instanceName
+        },
+        {
+          type: 'instance',
+          id: instance._id,
+          name: instance.instanceName
+        }
+      );
     }
   } catch (error) {
-    logger.error('Erro ao processar status de mensagem:', error);
-    logger.error(`Stack trace: ${error.stack}`);
+    logger.error('Erro ao processar SEND_MESSAGE:', error);
   }
-}
+};
 
 /**
- * Processa atualizações de mensagens (MESSAGES_UPDATE)
+ * Processa eventos de atualização de conexão (CONNECTION_UPDATE)
  */
-async function processMessageUpdate(webhook, instance) {
+const processConnectionUpdate = async (webhook, instanceName, instance) => {
   try {
-    // Por enquanto, processamos da mesma forma que mensagens normais
-    await processMessageStatus(webhook, instance);
-  } catch (error) {
-    logger.error('Erro ao processar atualização de mensagem:', error);
-    logger.error(`Stack trace: ${error.stack}`);
-  }
-}
-
-/**
- * Processa atualizações de status de conexão
- */
-async function processConnectionUpdate(webhook, instance) {
-  try {
-    // Extrair dados conforme a estrutura do webhook da Evolution API
-    const connectionData = webhook.data || webhook;
+    logger.info(`Processando CONNECTION_UPDATE para instância ${instanceName}`);
     
-    let connectionState;
+    const connectionInfo = webhook.connection || (webhook.data && webhook.data.connection) || {};
+    const connectionStatus = connectionInfo.status || connectionInfo;
     
-    // Verificar os diferentes campos possíveis para o estado
-    if (connectionData.state) {
-      connectionState = connectionData.state;
-    } else if (connectionData.connection) {
-      connectionState = connectionData.connection;
-    } else if (connectionData.status) {
-      connectionState = connectionData.status;
-    } else {
-      logger.warn('Status de conexão não identificado');
+    if (!connectionStatus) {
+      logger.warn('Evento CONNECTION_UPDATE sem status de conexão');
       return;
     }
     
-    let status;
+    let instanceStatus;
     
     // Mapear status da API para nosso modelo
-    switch (connectionState.toLowerCase()) {
+    switch (connectionStatus) {
       case 'open':
       case 'connected':
-        status = 'connected';
+        instanceStatus = 'connected';
         break;
       case 'connecting':
-        status = 'connecting';
+        instanceStatus = 'connecting';
         break;
       case 'close':
       case 'disconnected':
-      case 'loggedout':
-        status = 'disconnected';
+        instanceStatus = 'disconnected';
         break;
       default:
-        logger.warn(`Estado de conexão desconhecido: ${connectionState}`);
-        status = 'disconnected';
+        instanceStatus = 'unknown';
     }
     
     // Atualizar instância
-    await Instance.findByIdAndUpdate(
-      instance._id,
+    await Instance.findOneAndUpdate(
+      { instanceName },
       { 
         $set: { 
-          status: status,
-          lastConnection: status === 'connected' ? new Date() : instance.lastConnection
+          status: instanceStatus,
+          lastConnection: instanceStatus === 'connected' ? new Date() : undefined
         } 
       }
     );
     
-    logger.info(`Status da instância ${instance.instanceName} atualizado para ${status}`);
-  } catch (error) {
-    logger.error('Erro ao processar status de conexão:', error);
-    logger.error(`Stack trace: ${error.stack}`);
-  }
-}
-
-/**
- * Processa atualizações de QR Code
- */
-async function processQrCodeUpdate(webhook, instance) {
-  try {
-    // Extrair dados conforme a estrutura do webhook da Evolution API
-    const qrcodeData = webhook.data || webhook;
+    logger.info(`Status da instância ${instanceName} atualizado para ${instanceStatus}`);
     
-    if (!qrcodeData.qrcode) {
-      logger.warn('Webhook de QR Code sem dados do código');
-      return;
-    }
+    // Criar alerta para mudanças de status
+    const alertLevel = instanceStatus === 'connected' ? 'info' : 
+                        instanceStatus === 'connecting' ? 'info' : 'warning';
     
-    logger.info(`QR Code atualizado para instância ${instance.instanceName}`);
+    const alertMessage = instanceStatus === 'connected' ? 
+                          `Instância ${instanceName} conectada com sucesso` : 
+                          instanceStatus === 'connecting' ? 
+                          `Instância ${instanceName} tentando conexão` : 
+                          `Instância ${instanceName} desconectada`;
     
-    // Atualizar instância para status "connecting" se não estiver conectada
-    if (instance.status !== 'connected') {
-      await Instance.findByIdAndUpdate(
-        instance._id,
-        { status: 'connecting' }
-      );
-    }
-    
-    // Publicar evento de QR Code atualizado para outras partes do sistema
-    await queueService.publishEvent({
-      type: 'qrcode_updated',
-      data: {
-        instanceId: instance._id,
-        instanceName: instance.instanceName,
-        qrcode: qrcodeData.qrcode
+    await alertService.createAlert(
+      'connection_update',
+      alertLevel,
+      alertMessage,
+      {
+        instanceName,
+        status: instanceStatus,
+        previousStatus: instance.status
+      },
+      {
+        type: 'instance',
+        id: instance._id,
+        name: instance.instanceName
       }
-    });
+    );
   } catch (error) {
-    logger.error('Erro ao processar QR Code:', error);
-    logger.error(`Stack trace: ${error.stack}`);
+    logger.error('Erro ao processar CONNECTION_UPDATE:', error);
   }
-}
-
-/**
- * Processa atualizações de contatos
- */
-async function processContactUpdate(webhook, instance) {
-  try {
-    // Extrair dados conforme a estrutura do webhook da Evolution API
-    const contactData = webhook.data || webhook;
-    
-    // Se não tiver dados de contatos, não podemos processar
-    if (!contactData.contacts || !Array.isArray(contactData.contacts)) {
-      logger.warn('Webhook de contatos sem dados válidos');
-      return;
-    }
-    
-    logger.info(`Recebidos ${contactData.contacts.length} contatos para atualização`);
-    
-    // Processar cada contato
-    for (const contact of contactData.contacts) {
-      if (!contact.id) {
-        logger.debug('Contato sem ID, ignorando');
-        continue;
-      }
-      
-      const whatsappId = contact.id;
-      const phoneNumber = whatsappId.split('@')[0]; // Remover @s.whatsapp.net
-      const name = contact.name || contact.notify || contact.pushname || contact.shortName || 'Sem nome';
-      
-      // Verificar se já temos este contato
-      const existingContact = await Contact.findOne({ 
-        $or: [
-          { phoneNumber },
-          { whatsappId }
-        ]
-      });
-      
-      if (existingContact) {
-        // Atualizar contato existente
-        let updated = false;
-        
-        // Só atualizar nome se tivermos um valor melhor
-        if (name !== 'Sem nome' && (!existingContact.name || existingContact.name === 'Desconhecido' || existingContact.name === 'Sem nome')) {
-          existingContact.name = name;
-          updated = true;
-        }
-        
-        // Garantir que temos o whatsappId
-        if (!existingContact.whatsappId) {
-          existingContact.whatsappId = whatsappId;
-          updated = true;
-        }
-        
-        // Atualizar outros campos, se disponíveis
-        if (contact.status && !existingContact.status) {
-          existingContact.status = contact.status;
-          updated = true;
-        }
-        
-        if (contact.profilePicUrl && !existingContact.profilePictureUrl) {
-          existingContact.profilePictureUrl = contact.profilePicUrl;
-          updated = true;
-        }
-        
-        if (updated) {
-          await existingContact.save();
-          logger.debug(`Contato atualizado: ${existingContact.name} (${phoneNumber})`);
-        }
-      } else {
-        // Criar novo contato
-        const newContact = new Contact({
-          name,
-          phoneNumber,
-          whatsappId,
-          status: contact.status || '',
-          profilePictureUrl: contact.profilePicUrl || '',
-          source: 'sync'
-        });
-        
-        await newContact.save();
-        logger.debug(`Novo contato criado: ${name} (${phoneNumber})`);
-      }
-    }
-    
-    logger.info(`Processamento de contatos concluído com sucesso`);
-  } catch (error) {
-    logger.error('Erro ao processar atualização de contatos:', error);
-    logger.error(`Stack trace: ${error.stack}`);
-  }
-}
-
-/**
- * Processa a sincronização inicial de contatos
- */
-async function processContactsInitialSync(webhook, instance) {
-  try {
-    // Chama o mesmo processamento de atualização de contatos
-    await processContactUpdate(webhook, instance);
-  } catch (error) {
-    logger.error('Erro ao processar sincronização inicial de contatos:', error);
-    logger.error(`Stack trace: ${error.stack}`);
-  }
-} 
+}; 

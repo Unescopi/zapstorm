@@ -6,7 +6,6 @@ const Campaign = require('./Campaign');
 const Message = require('./Message');
 const Instance = require('./Instance');
 const Alert = require('./Alert');
-const Settings = require('./Settings');
 
 module.exports = {
   User,
@@ -15,6 +14,5 @@ module.exports = {
   Campaign,
   Message,
   Instance,
-  Alert,
-  Settings
+  Alert
 }; 

@@ -233,6 +233,47 @@ class EvolutionApiService {
     }
   }
 
+  // Configurar webhook para a instância
+  async setWebhook(instanceName, webhookUrl, events = []) {
+    try {
+      // Definir eventos padrão se não foram fornecidos
+      if (!events || events.length === 0) {
+        events = [
+          "MESSAGES_UPSERT",
+          "MESSAGES_UPDATE", 
+          "MESSAGES_DELETE",
+          "SEND_MESSAGE",
+          "CONNECTION_UPDATE"
+        ];
+      }
+      
+      const payload = {
+        enabled: true,
+        url: webhookUrl,
+        webhook_by_events: false,
+        webhook_base64: false,
+        events: events
+      };
+      
+      logger.info(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
+      
+      const response = await this.axios.post(`/webhook/set/${instanceName}`, payload);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'setWebhook');
+    }
+  }
+  
+  // Verificar status do webhook configurado
+  async getWebhook(instanceName) {
+    try {
+      const response = await this.axios.get(`/webhook/find/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'getWebhook');
+    }
+  }
+
   // Criar nova instância
   async createInstance(instanceName) {
     try {
@@ -264,25 +305,6 @@ class EvolutionApiService {
       return response.data;
     } catch (error) {
       this._handleError(error, 'restartInstance');
-    }
-  }
-
-  // Métodos para webhooks
-  async setWebhook(instanceName, webhookData) {
-    try {
-      const response = await this.axios.post(`/webhook/set/${instanceName}`, webhookData);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'setWebhook');
-    }
-  }
-
-  async findWebhook(instanceName) {
-    try {
-      const response = await this.axios.get(`/webhook/find/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'findWebhook');
     }
   }
 }

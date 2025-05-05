@@ -30,14 +30,12 @@ const getApiUrl = () => {
 };
 
 // Obtém a URL da API
-const apiUrl = getApiUrl();
-console.log('URL da API final:', apiUrl);
+const API_URL = getApiUrl();
+console.log('URL da API final:', API_URL);
 
 // Configuração base do axios usando caminhos relativos
 const api = axios.create({
-  // Usamos apenas o caminho relativo '/api' para todas as requisições
-  // O navegador automaticamente usa o host atual, resolvendo o problema
-  baseURL: '/api',
+  baseURL: API_URL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -49,8 +47,7 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('@ZapStorm:token');
     if (token) {
-      config.headers.common = config.headers.common || {};
-      config.headers.common['Authorization'] = `Bearer ${token}`;
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
@@ -67,7 +64,11 @@ api.interceptors.response.use(
       // Token expirado ou inválido
       localStorage.removeItem('@ZapStorm:token');
       localStorage.removeItem('@ZapStorm:user');
-      window.location.href = '/login';
+      
+      // Redirecionar para login se não estiver na página de login
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

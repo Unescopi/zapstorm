@@ -33,9 +33,6 @@ interface AppSettings {
   webhookEnabled: boolean;
   cacheExpiration: number;
   maxConcurrentMessages: number;
-  webhookByEvents: boolean;
-  webhookBase64: boolean;
-  webhookEvents: Record<string, boolean>;
 }
 
 const Settings: React.FC = () => {
@@ -48,10 +45,7 @@ const Settings: React.FC = () => {
     webhookUrl: '',
     webhookEnabled: false,
     cacheExpiration: 86400,
-    maxConcurrentMessages: 10,
-    webhookByEvents: false,
-    webhookBase64: false,
-    webhookEvents: {}
+    maxConcurrentMessages: 10
   });
   
   const [loading, setLoading] = useState(true);
@@ -96,12 +90,15 @@ const Settings: React.FC = () => {
     }
   };
 
-  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type, checked } = event.target;
-    setSettings({
-      ...settings,
-      [name]: type === 'checkbox' ? checked : type === 'number' ? Number(value) : value
-    });
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value, type, checked } = e.target;
+    
+    setSettings(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : 
+              type === 'number' ? Number(value) : 
+              value
+    }));
   };
 
   const handleSave = async () => {
@@ -272,39 +269,15 @@ const Settings: React.FC = () => {
                 />
                 
                 {settings.webhookEnabled && (
-                  <>
-                    <TextField
-                      fullWidth
-                      label="URL do Webhook"
-                      name="webhookUrl"
-                      value={settings.webhookUrl}
-                      onChange={handleChange}
-                      placeholder="https://example.com/webhook"
-                      helperText="URL para receber eventos de mensagens"
-                    />
-                    
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          name="webhookByEvents"
-                          checked={settings.webhookByEvents}
-                          onChange={handleChange}
-                        />
-                      }
-                      label="Configurar webhook por tipo de evento"
-                    />
-                    
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          name="webhookBase64"
-                          checked={settings.webhookBase64}
-                          onChange={handleChange}
-                        />
-                      }
-                      label="Enviar mídia em Base64 via webhook"
-                    />
-                  </>
+                  <TextField
+                    fullWidth
+                    label="URL do Webhook"
+                    name="webhookUrl"
+                    value={settings.webhookUrl}
+                    onChange={handleChange}
+                    placeholder="https://example.com/webhook"
+                    helperText="URL para receber eventos de mensagens"
+                  />
                 )}
               </Stack>
             </AccordionDetails>
