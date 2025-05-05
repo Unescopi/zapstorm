@@ -9,8 +9,6 @@ const instanceRoutes = require('./instanceRoutes');
 const contactRoutes = require('./contactRoutes');
 const templateRoutes = require('./templateRoutes');
 const campaignRoutes = require('./campaignRoutes');
-const webhookRoutes = require('./webhookRoutes');
-const settingRoutes = require('./settingRoutes');
 // Removendo a rota de mensagens que não é necessária
 // const messageRoutes = require('./messageRoutes');
 const healthRoutes = require('./healthRoutes');
@@ -19,9 +17,6 @@ const healthRoutes = require('./healthRoutes');
 module.exports = (app) => {
   // Rota para verificação de sistema
   app.use('/health', healthRoutes); // Não requer autenticação
-  
-  // Webhook (não requer autenticação, pois é chamado por sistema externo)
-  app.use('/webhook', webhookRoutes);
   
   // Autenticação
   app.use('/auth', authRoutes);
@@ -35,7 +30,6 @@ module.exports = (app) => {
   app.use('/contacts', contactRoutes);
   app.use('/templates', templateRoutes);
   app.use('/campaigns', campaignRoutes);
-  app.use('/settings', settingRoutes);
   // Removendo a rota de mensagens
   // app.use('/messages', messageRoutes);
 }; 

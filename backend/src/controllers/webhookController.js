@@ -1,16 +1,19 @@
-const { Message, Instance, Campaign } = require('../models');
+const { Message, Instance, Campaign, WebhookConfig } = require('../models');
 const logger = require('../utils/logger');
+const EvolutionApiService = require('../services/evolutionApiService');
 
 /**
  * Processa webhooks da API Evolution
- * Esta função recebe eventos de mensagens e atualizações de status
+ * Esta função recebe eventos e encaminha para o processador apropriado
  */
 exports.processWebhook = async (req, res) => {
   try {
     const { instanceName } = req.params;
     const webhook = req.body;
+    const event = req.headers['x-hub-event'] || webhook.event;
 
-    logger.info(`Webhook recebido para instância ${instanceName}: ${JSON.stringify(webhook)}`);
+    logger.info(`Webhook recebido para instância ${instanceName}: Evento ${event}`);
+    logger.debug(`Dados do webhook: ${JSON.stringify(webhook)}`);
 
     // Verificar se a instância existe
     const instance = await Instance.findOne({ instanceName });
@@ -22,24 +25,30 @@ exports.processWebhook = async (req, res) => {
       });
     }
 
-    // Processa diferentes tipos de eventos
-    if (webhook.event) {
-      switch (webhook.event) {
-        case 'message':
-          await processIncomingMessage(webhook, instanceName);
-          break;
-        
-        case 'message-status':
-          await processMessageStatus(webhook, instanceName);
+    // Processar diferentes tipos de eventos
+    if (event) {
+      switch (event) {
+        case 'MESSAGES_UPSERT':
+          await processMessagesUpsert(webhook, instanceName);
           break;
           
-        case 'connection-status':
-          await processConnectionStatus(webhook, instanceName);
+        case 'MESSAGES_UPDATE':
+          await processMessagesUpdate(webhook, instanceName);
+          break;
+        
+        case 'CONNECTION_UPDATE':
+          await processConnectionUpdate(webhook, instanceName);
+          break;
+          
+        case 'SEND_MESSAGE':
+          await processSendMessage(webhook, instanceName);
           break;
           
         default:
-          logger.warn(`Tipo de evento desconhecido: ${webhook.event}`);
+          logger.info(`Evento ${event} recebido, mas não processado especificamente`);
       }
+    } else {
+      logger.warn(`Webhook sem evento definido: ${JSON.stringify(webhook)}`);
     }
 
     // Sempre retornar 200 para confirmar recebimento
@@ -59,142 +68,92 @@ exports.processWebhook = async (req, res) => {
 };
 
 /**
- * Processa mensagens recebidas
+ * Processa webhooks de mensagens recebidas (MESSAGES_UPSERT)
  */
-const processIncomingMessage = async (webhook, instanceName) => {
+const processMessagesUpsert = async (webhook, instanceName) => {
   try {
-    const { message } = webhook;
+    logger.info(`Processando evento MESSAGES_UPSERT para ${instanceName}`);
+    const messages = webhook.data?.messages || [];
     
-    if (!message || !message.key || !message.key.id) {
-      logger.warn('Mensagem recebida sem ID');
-      return;
-    }
-    
-    // Verificar se é uma resposta a uma mensagem que enviamos
-    // Nesse caso, podemos registrar a leitura
-    
-    // Atualizar status de mensagens que possuem este messageId
-    const updated = await Message.updateMany(
-      { messageId: message.key.id },
-      { 
-        $set: { 
-          status: 'read',
-          readAt: new Date()
-        } 
-      }
-    );
-    
-    if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens marcadas como lidas`);
-      
-      // Atualizar métricas das campanhas associadas
-      // Buscar mensagens afetadas para saber de quais campanhas são
-      const messages = await Message.find({ messageId: message.key.id });
-      const campaignIds = [...new Set(messages.map(m => m.campaignId.toString()))];
-      
-      for (const campaignId of campaignIds) {
-        await Campaign.findByIdAndUpdate(
-          campaignId,
-          { $inc: { 'metrics.read': 1 } }
-        );
+    for (const message of messages) {
+      // Processar apenas mensagens de outros usuários (não mensagens que nós enviamos)
+      if (!message.key.fromMe) {
+        logger.info(`Nova mensagem recebida de ${message.key.remoteJid}`);
+        
+        // Aqui você pode implementar lógica de resposta automática, registrar a mensagem no banco, etc.
+        
+        // Exemplo: atualizar status de mensagens que possivelmente enviamos
+        if (message.key.id) {
+          await Message.updateMany(
+            { messageId: message.key.id },
+            { 
+              $set: { 
+                status: 'delivered',
+                deliveredAt: new Date()
+              } 
+            }
+          );
+        }
       }
     }
   } catch (error) {
-    logger.error('Erro ao processar mensagem recebida:', error);
+    logger.error('Erro ao processar MESSAGES_UPSERT:', error);
   }
 };
 
 /**
- * Processa atualizações de status de mensagens
+ * Processa webhooks de atualização de mensagens (MESSAGES_UPDATE)
  */
-const processMessageStatus = async (webhook, instanceName) => {
+const processMessagesUpdate = async (webhook, instanceName) => {
   try {
-    const { status, id } = webhook;
+    logger.info(`Processando evento MESSAGES_UPDATE para ${instanceName}`);
+    const messages = webhook.data?.messages || [];
     
-    if (!id) {
-      logger.warn('Status recebido sem ID de mensagem');
-      return;
-    }
-    
-    let messageStatus;
-    
-    // Mapear status da API para nosso modelo
-    switch (status) {
-      case 'sent':
-        messageStatus = 'sent';
-        break;
-      case 'delivered':
-        messageStatus = 'delivered';
-        break;
-      case 'read':
-        messageStatus = 'read';
-        break;
-      case 'failed':
-        messageStatus = 'failed';
-        break;
-      default:
-        logger.warn(`Status desconhecido: ${status}`);
-        return;
-    }
-    
-    // Determinar que campo de data atualizar
-    let dateField = {};
-    if (messageStatus === 'delivered') {
-      dateField.deliveredAt = new Date();
-    } else if (messageStatus === 'read') {
-      dateField.readAt = new Date();
-    }
-    
-    // Atualizar mensagens
-    const updated = await Message.updateMany(
-      { messageId: id },
-      { 
-        $set: { 
-          status: messageStatus,
-          ...dateField
-        } 
-      }
-    );
-    
-    if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens atualizadas para status ${messageStatus}`);
-      
-      // Atualizar métricas das campanhas
-      const messages = await Message.find({ messageId: id });
-      const campaignIds = [...new Set(messages.map(m => m.campaignId.toString()))];
-      
-      for (const campaignId of campaignIds) {
-        // Incrementar campo correspondente nas métricas
-        await Campaign.findByIdAndUpdate(
-          campaignId,
-          { $inc: { [`metrics.${messageStatus}`]: 1 } }
-        );
-      }
-      
-      // Atualizar métricas da instância
-      if (messageStatus === 'delivered' || messageStatus === 'read') {
-        await Instance.findOneAndUpdate(
-          { instanceName },
-          { $inc: { 'metrics.totalDelivered': 1 } }
-        );
+    for (const message of messages) {
+      // Atualizar status de mensagens que possuem este messageId
+      if (message.key.id) {
+        // Se o status for read, atualizar no banco
+        if (message.update.status === 'READ') {
+          await Message.updateMany(
+            { messageId: message.key.id },
+            { 
+              $set: { 
+                status: 'read',
+                readAt: new Date()
+              } 
+            }
+          );
+          
+          logger.info(`Mensagem ${message.key.id} marcada como lida`);
+          
+          // Atualizar métricas das campanhas associadas
+          const updatedMessages = await Message.find({ messageId: message.key.id });
+          const campaignIds = [...new Set(updatedMessages.map(m => m.campaignId?.toString()).filter(Boolean))];
+          
+          for (const campaignId of campaignIds) {
+            await Campaign.findByIdAndUpdate(
+              campaignId,
+              { $inc: { 'metrics.read': 1 } }
+            );
+          }
+        }
       }
     }
   } catch (error) {
-    logger.error('Erro ao processar status de mensagem:', error);
+    logger.error('Erro ao processar MESSAGES_UPDATE:', error);
   }
 };
 
 /**
- * Processa atualizações de status de conexão
+ * Processa webhooks de conexão (CONNECTION_UPDATE)
  */
-const processConnectionStatus = async (webhook, instanceName) => {
+const processConnectionUpdate = async (webhook, instanceName) => {
   try {
-    const { status } = webhook;
+    logger.info(`Processando evento CONNECTION_UPDATE para ${instanceName}`);
     
+    // Mapear status da conexão para o nosso modelo
     let connectionStatus;
-    
-    // Mapear status da API para nosso modelo
-    switch (status) {
+    switch (webhook.data?.state) {
       case 'open':
         connectionStatus = 'connected';
         break;
@@ -205,7 +164,7 @@ const processConnectionStatus = async (webhook, instanceName) => {
         connectionStatus = 'disconnected';
         break;
       default:
-        connectionStatus = 'disconnected';
+        connectionStatus = webhook.data?.state || 'disconnected';
     }
     
     // Atualizar instância
@@ -221,6 +180,163 @@ const processConnectionStatus = async (webhook, instanceName) => {
     
     logger.info(`Status da instância ${instanceName} atualizado para ${connectionStatus}`);
   } catch (error) {
-    logger.error('Erro ao processar status de conexão:', error);
+    logger.error('Erro ao processar CONNECTION_UPDATE:', error);
+  }
+};
+
+/**
+ * Processa webhooks de mensagens enviadas (SEND_MESSAGE)
+ */
+const processSendMessage = async (webhook, instanceName) => {
+  try {
+    logger.info(`Processando evento SEND_MESSAGE para ${instanceName}`);
+    
+    // Obter os dados da mensagem enviada
+    const messageData = webhook.data;
+    if (!messageData || !messageData.key?.id) {
+      logger.warn('Dados incompletos de SEND_MESSAGE');
+      return;
+    }
+    
+    // Atualizar status da mensagem no banco
+    await Message.updateMany(
+      { messageId: messageData.key.id },
+      { 
+        $set: { 
+          status: 'sent',
+          sentAt: new Date()
+        } 
+      }
+    );
+    
+    logger.info(`Mensagem ${messageData.key.id} marcada como enviada`);
+    
+    // Atualizar métricas das campanhas associadas
+    const updatedMessages = await Message.find({ messageId: messageData.key.id });
+    const campaignIds = [...new Set(updatedMessages.map(m => m.campaignId?.toString()).filter(Boolean))];
+    
+    for (const campaignId of campaignIds) {
+      await Campaign.findByIdAndUpdate(
+        campaignId,
+        { $inc: { 'metrics.sent': 1, 'metrics.pending': -1 } }
+      );
+    }
+    
+    // Atualizar métricas da instância
+    await Instance.findOneAndUpdate(
+      { instanceName },
+      { $inc: { 'metrics.totalSent': 1 } }
+    );
+  } catch (error) {
+    logger.error('Erro ao processar SEND_MESSAGE:', error);
+  }
+};
+
+/**
+ * Configura webhook para uma instância
+ */
+exports.configureWebhook = async (req, res) => {
+  try {
+    const { instanceName } = req.params;
+    const { enabled, url, webhookByEvents, events, base64 } = req.body;
+    
+    // Verificar se a instância existe
+    const instance = await Instance.findOne({ instanceName });
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    // Validar dados básicos
+    if (enabled && !url) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL do webhook é obrigatória quando habilitado'
+      });
+    }
+    
+    // Criar ou atualizar configuração de webhook no banco
+    let webhookConfig = await WebhookConfig.findOne({ instanceName });
+    
+    if (!webhookConfig) {
+      webhookConfig = new WebhookConfig({
+        instanceName,
+        enabled,
+        url,
+        webhookByEvents,
+        events,
+        base64
+      });
+    } else {
+      webhookConfig.enabled = enabled;
+      if (url) webhookConfig.url = url;
+      if (webhookByEvents !== undefined) webhookConfig.webhookByEvents = webhookByEvents;
+      if (events) webhookConfig.events = events;
+      if (base64 !== undefined) webhookConfig.base64 = base64;
+    }
+    
+    await webhookConfig.save();
+    
+    // Se estiver habilitado, configurar no Evolution API
+    if (enabled) {
+      const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+      
+      const payload = {
+        url,
+        webhookByEvents,
+        base64,
+        events
+      };
+      
+      await evolutionApi.configureWebhook(instanceName, payload);
+      
+      logger.info(`Webhook configurado com sucesso para instância ${instanceName}`);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: enabled ? 'Webhook configurado com sucesso' : 'Webhook desabilitado com sucesso',
+      data: webhookConfig
+    });
+  } catch (error) {
+    logger.error('Erro ao configurar webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao configurar webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Obtém configuração de webhook para uma instância
+ */
+exports.getWebhookConfig = async (req, res) => {
+  try {
+    const { instanceName } = req.params;
+    
+    // Buscar configuração no banco
+    const webhookConfig = await WebhookConfig.findOne({ instanceName });
+    
+    if (!webhookConfig) {
+      return res.status(404).json({
+        success: false,
+        message: 'Configuração de webhook não encontrada'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: webhookConfig
+    });
+  } catch (error) {
+    logger.error('Erro ao obter configuração de webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao obter configuração de webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 }; 

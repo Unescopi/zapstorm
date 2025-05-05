@@ -233,6 +233,39 @@ class EvolutionApiService {
     }
   }
 
+  // Configurar webhook para instância
+  async configureWebhook(instanceName, webhookConfig) {
+    try {
+      logger.info(`Configurando webhook para instância ${instanceName}:`, webhookConfig);
+      
+      const payload = {
+        url: webhookConfig.url,
+        webhook_by_events: webhookConfig.webhookByEvents,
+        webhook_base64: webhookConfig.base64,
+        events: webhookConfig.events
+      };
+      
+      logger.info(`Payload para configuração de webhook: ${JSON.stringify(payload)}`);
+      
+      const response = await this.axios.post(`/webhook/set/${instanceName}`, payload);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'configureWebhook');
+    }
+  }
+  
+  // Obter configuração de webhook da instância
+  async getWebhookConfig(instanceName) {
+    try {
+      logger.info(`Obtendo configuração de webhook para instância ${instanceName}`);
+      
+      const response = await this.axios.get(`/webhook/find/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'getWebhookConfig');
+    }
+  }
+
   // Criar nova instância
   async createInstance(instanceName) {
     try {

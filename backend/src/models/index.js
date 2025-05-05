@@ -6,7 +6,7 @@ const Campaign = require('./Campaign');
 const Message = require('./Message');
 const Instance = require('./Instance');
 const Alert = require('./Alert');
-const Setting = require('./Setting');
+const WebhookConfig = require('./WebhookConfig');
 
 module.exports = {
   User,
@@ -16,5 +16,5 @@ module.exports = {
   Message,
   Instance,
   Alert,
-  Setting
+  WebhookConfig
 }; 
