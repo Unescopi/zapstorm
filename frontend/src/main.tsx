@@ -4,25 +4,21 @@ import App from './App.tsx'
 import './index.css'
 
 // Declaração de tipo para a propriedade window.env
-// Deve ser compatível com a declaração em services/api.ts
 declare global {
   interface Window {
-    env?: {
-      API_URL?: string;
+    env: {
+      API_URL: string;
     }
   }
 }
 
-// Inicializar env se não existir
+// Verificar se já temos as variáveis de ambiente injetadas
+// Caso contrário, usar as definidas no build
 if (!window.env) {
   window.env = {
-    API_URL: import.meta.env.VITE_API_URL || '/api'
+    API_URL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
   };
 }
-
-// Log para ajudar no diagnóstico
-console.log(`ZapStorm Frontend - Ambiente: ${import.meta.env.MODE}`);
-console.log(`API URL: ${window.env.API_URL}`);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
