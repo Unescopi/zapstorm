@@ -20,9 +20,7 @@ import {
   Chip,
   Avatar,
   Snackbar,
-  Alert,
-  Tabs,
-  Tab
+  Alert
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -30,17 +28,20 @@ import QrCode2Icon from '@mui/icons-material/QrCode2';
 import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import SettingsIcon from '@mui/icons-material/Settings';
-import WebhookIcon from '@mui/icons-material/Webhook';
 import api from '../../services/api';
-import WebhookConfig from '../../components/WebhookConfig';
-import { Instance as InstanceType } from '../../types/Instance';
 
 // Definição do tipo para setTimeout/setInterval
 type TimeoutType = ReturnType<typeof setTimeout>;
 
-// Usando o tipo InstanceType do arquivo de tipos para evitar duplicação
-type Instance = InstanceType;
+type Instance = {
+  _id: string;
+  instanceName: string;
+  status: 'disconnected' | 'connected' | 'connecting' | 'error';
+  qrcode?: string;
+  lastConnection?: string;
+  phone?: string;
+  createdAt: string;
+};
 
 const statusColors = {
   disconnected: 'error',
@@ -74,10 +75,6 @@ const Instances: React.FC = () => {
     message: '',
     severity: 'success' as 'success' | 'error' | 'info' | 'warning'
   });
-  
-  // Estado para diálogo de detalhes da instância
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
-  const [tabValue, setTabValue] = useState(0);
 
   useEffect(() => {
     loadInstances();
@@ -292,55 +289,19 @@ const Instances: React.FC = () => {
     loadInstances();
   };
 
-  // Abrir diálogo de detalhes da instância
-  const openInstanceDetails = async (instance: Instance) => {
-    setSelectedInstance(instance);
-    setDetailsDialogOpen(true);
-    setTabValue(0);
-  };
-
-  // Fechar diálogo de detalhes
-  const handleCloseDetailsDialog = () => {
-    setDetailsDialogOpen(false);
-    setSelectedInstance(null);
-  };
-
-  // Lidar com mudança de abas
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
-
-  // Atualizar instância após alteração
-  const handleInstanceUpdated = () => {
-    if (selectedInstance) {
-      loadInstanceDetails(selectedInstance._id);
-    }
-    loadInstances(false);
-  };
-
   return (
     <Box p={3}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
         <Typography variant="h4">Instâncias WhatsApp</Typography>
-        <Box>
-          <Button 
-            variant="contained" 
-            color="primary" 
-            startIcon={<SyncIcon />}
-            onClick={handleSyncInstances}
-            disabled={syncLoading}
-            sx={{ mr: 1 }}
-          >
-            {syncLoading ? 'Sincronizando...' : 'Sincronizar Instâncias'}
-          </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={() => setOpenDialog(true)}
-          >
-            Nova Instância
-          </Button>
-        </Box>
+        <Button 
+          variant="contained" 
+          color="primary" 
+          startIcon={<SyncIcon />}
+          onClick={handleSyncInstances}
+          disabled={syncLoading}
+        >
+          {syncLoading ? 'Sincronizando...' : 'Sincronizar Instâncias'}
+        </Button>
       </Box>
 
       {loading ? (
@@ -364,91 +325,84 @@ const Instances: React.FC = () => {
               {instances.length > 0 ? (
                 instances.map((instance) => (
                   <TableRow key={instance._id}>
-                    <TableCell>{instance.instanceName}</TableCell>
+                    <TableCell>
+                      <Box display="flex" alignItems="center">
+                        <Avatar sx={{ width: 30, height: 30, mr: 1, bgcolor: 'primary.main' }}>
+                          <PhoneAndroidIcon fontSize="small" />
+                        </Avatar>
+                        {instance.instanceName}
+                      </Box>
+                    </TableCell>
                     <TableCell>
                       <Chip 
                         label={statusLabels[instance.status]} 
-                        color={statusColors[instance.status] as any}
-                        size="small"
+                        color={statusColors[instance.status] as any} 
+                        size="small" 
                       />
                     </TableCell>
+                    <TableCell>{instance.phone || '-'}</TableCell>
                     <TableCell>
-                      {instance.owner ? (
-                        <Box display="flex" alignItems="center">
-                          {instance.profilePictureUrl && (
-                            <Avatar 
-                              src={instance.profilePictureUrl}
-                              sx={{ width: 24, height: 24, mr: 1 }}
-                            />
-                          )}
-                          {instance.owner.replace('@s.whatsapp.net', '')}
-                        </Box>
-                      ) : (
-                        '-'
-                      )}
+                      {instance.lastConnection 
+                        ? new Date(instance.lastConnection).toLocaleString() 
+                        : 'Nunca conectado'}
                     </TableCell>
-                    <TableCell>
-                      {instance.lastConnection ? new Date(instance.lastConnection).toLocaleString() : '-'}
-                    </TableCell>
-                    <TableCell>
-                      {new Date(instance.createdAt).toLocaleDateString()}
-                    </TableCell>
+                    <TableCell>{new Date(instance.createdAt).toLocaleString()}</TableCell>
                     <TableCell align="center">
-                      {refreshing[instance._id] ? (
-                        <CircularProgress size={24} />
-                      ) : (
-                        <>
-                          {instance.status === 'disconnected' && (
-                            <IconButton 
-                              color="primary" 
-                              size="small"
-                              onClick={() => handleConnect(instance)}
-                              title="Conectar"
-                            >
-                              <QrCode2Icon fontSize="small" />
-                            </IconButton>
+                      {instance.status !== 'connected' && (
+                        <IconButton 
+                          color="primary" 
+                          size="small" 
+                          onClick={() => handleConnect(instance)}
+                          disabled={refreshing[instance._id]}
+                          title="Conectar"
+                        >
+                          {refreshing[instance._id] ? (
+                            <CircularProgress size={20} />
+                          ) : (
+                            <QrCode2Icon fontSize="small" />
                           )}
-                          
-                          {instance.status === 'connected' && (
-                            <IconButton 
-                              color="warning" 
-                              size="small"
-                              onClick={() => handleDisconnect(instance)}
-                              title="Desconectar"
-                            >
-                              <LogoutIcon fontSize="small" />
-                            </IconButton>
-                          )}
-                          
-                          <IconButton 
-                            color="info" 
-                            size="small"
-                            onClick={() => handleRestart(instance)}
-                            title="Reiniciar"
-                          >
-                            <RefreshIcon fontSize="small" />
-                          </IconButton>
-                          
-                          <IconButton 
-                            color="success" 
-                            size="small"
-                            onClick={() => openInstanceDetails(instance)}
-                            title="Configurações"
-                          >
-                            <SettingsIcon fontSize="small" />
-                          </IconButton>
-                          
-                          <IconButton 
-                            color="error" 
-                            size="small"
-                            onClick={() => confirmDelete(instance)}
-                            disabled={instance.status === 'connected' || refreshing[instance._id]}
-                            title="Excluir"
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </>
+                        </IconButton>
                       )}
+                      
+                      {instance.status === 'connected' && (
+                        <IconButton 
+                          color="warning" 
+                          size="small"
+                          onClick={() => handleDisconnect(instance)}
+                          disabled={refreshing[instance._id]}
+                          title="Desconectar"
+                        >
+                          {refreshing[instance._id] ? (
+                            <CircularProgress size={20} />
+                          ) : (
+                            <LogoutIcon fontSize="small" />
+                          )}
+                        </IconButton>
+                      )}
+                      
+                      <IconButton 
+                        color="info" 
+                        size="small"
+                        onClick={() => handleRestart(instance)}
+                        disabled={refreshing[instance._id]}
+                        title="Reiniciar"
+                      >
+                        {refreshing[instance._id] ? (
+                          <CircularProgress size={20} />
+                        ) : (
+                          <RefreshIcon fontSize="small" />
+                        )}
+                      </IconButton>
+                      
+                      <IconButton 
+                        color="error" 
+                        size="small"
+                        onClick={() => confirmDelete(instance)}
+                        disabled={instance.status === 'connected' || refreshing[instance._id]}
+                        title="Excluir"
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
                     </TableCell>
                   </TableRow>
                 ))
@@ -538,101 +492,6 @@ const Instances: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleQrCodeClose}>Fechar</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Diálogo de detalhes da instância */}
-      <Dialog 
-        open={detailsDialogOpen} 
-        onClose={handleCloseDetailsDialog} 
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          {selectedInstance?.instanceName}
-          <Chip 
-            label={selectedInstance?.status ? statusLabels[selectedInstance.status] : 'Desconhecido'} 
-            color={selectedInstance?.status ? statusColors[selectedInstance.status] as any : 'default'}
-            size="small"
-            sx={{ ml: 1 }}
-          />
-        </DialogTitle>
-        <DialogContent>
-          <Tabs 
-            value={tabValue} 
-            onChange={handleTabChange}
-            sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
-          >
-            <Tab label="Informações" icon={<PhoneAndroidIcon />} iconPosition="start" />
-            <Tab label="Webhook" icon={<WebhookIcon />} iconPosition="start" />
-          </Tabs>
-          
-          {tabValue === 0 && selectedInstance && (
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Informações da Instância
-              </Typography>
-              
-              <TableContainer component={Paper} variant="outlined">
-                <Table size="small">
-                  <TableBody>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold', width: '30%' }}>
-                        Nome da Instância
-                      </TableCell>
-                      <TableCell>{selectedInstance.instanceName}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold' }}>
-                        Status
-                      </TableCell>
-                      <TableCell>{statusLabels[selectedInstance.status]}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold' }}>
-                        Telefone
-                      </TableCell>
-                      <TableCell>{selectedInstance.owner?.replace('@s.whatsapp.net', '') || '-'}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold' }}>
-                        Nome do Perfil
-                      </TableCell>
-                      <TableCell>{selectedInstance.profileName || '-'}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold' }}>
-                        Última Conexão
-                      </TableCell>
-                      <TableCell>
-                        {selectedInstance.lastConnection 
-                          ? new Date(selectedInstance.lastConnection).toLocaleString() 
-                          : '-'}
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 'bold' }}>
-                        Criado em
-                      </TableCell>
-                      <TableCell>
-                        {new Date(selectedInstance.createdAt).toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Box>
-          )}
-          
-          {tabValue === 1 && selectedInstance && (
-            <WebhookConfig 
-              instance={selectedInstance} 
-              onWebhookUpdated={handleInstanceUpdated} 
-            />
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDetailsDialog}>Fechar</Button>
         </DialogActions>
       </Dialog>
 

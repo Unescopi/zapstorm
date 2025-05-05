@@ -267,24 +267,23 @@ class EvolutionApiService {
     }
   }
 
-  // Configurar webhook para uma instância
-  async configureWebhook(instanceName, webhookConfig) {
+  // Método para configurar webhook de uma instância
+  async setInstanceWebhook(instanceName, webhookConfig) {
     try {
-      // Validação básica
-      if (!webhookConfig || !webhookConfig.url) {
-        console.error('Erro: URL do webhook não fornecida');
-        logger.error('Erro: URL do webhook não fornecida');
-        throw new Error('URL do webhook não fornecida');
+      const { url, enabled = true, events = [] } = webhookConfig;
+      
+      if (!url) {
+        throw new Error('URL do webhook é obrigatória');
       }
-
-      // Payload conforme documentação da Evolution API
+      
       const payload = {
-        url: webhookConfig.url,
-        webhook_by_events: webhookConfig.webhookByEvents || false,
-        webhook_base64: webhookConfig.webhookBase64 || false,
-        events: webhookConfig.events || [
+        url: url,
+        enabled: enabled,
+        webhook_by_events: false,
+        webhook_base64: false,
+        events: events.length > 0 ? events : [
           "QRCODE_UPDATED",
-          "MESSAGES_UPSERT",
+          "MESSAGES_UPSERT", 
           "MESSAGES_UPDATE",
           "MESSAGES_DELETE",
           "SEND_MESSAGE",
@@ -292,23 +291,25 @@ class EvolutionApiService {
         ]
       };
       
-      console.log(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
       logger.info(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
       
       const response = await this.axios.post(`/webhook/instance/${instanceName}`, payload);
+      
+      logger.info(`Webhook configurado com sucesso para ${instanceName}`);
       return response.data;
     } catch (error) {
-      this._handleError(error, 'configureWebhook');
+      this._handleError(error, 'setInstanceWebhook');
     }
   }
-
-  // Buscar configuração atual de webhook
-  async fetchWebhook(instanceName) {
+  
+  // Método para obter a configuração atual do webhook
+  async getInstanceWebhook(instanceName) {
     try {
+      logger.info(`Obtendo configuração de webhook para instância ${instanceName}`);
       const response = await this.axios.get(`/webhook/find/${instanceName}`);
       return response.data;
     } catch (error) {
-      this._handleError(error, 'fetchWebhook');
+      this._handleError(error, 'getInstanceWebhook');
     }
   }
 }
