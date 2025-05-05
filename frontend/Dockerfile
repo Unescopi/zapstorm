@@ -15,11 +15,17 @@ COPY . .
 # Construir aplicação
 RUN npm run build
 
+# Verificar os arquivos gerados
+RUN ls -la dist && echo "Verificando arquivos JS" && find dist -name "*.js" -type f | head -n 5
+
 # Estágio de produção
 FROM nginx:alpine
 
 # Copiar os arquivos de build gerados
 COPY --from=build /app/dist /usr/share/nginx/html
+
+# Garantir que env.js exista
+COPY --from=build /app/public/env.js /usr/share/nginx/html/env.js
 
 # Copiar arquivo de configuração personalizado do nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf

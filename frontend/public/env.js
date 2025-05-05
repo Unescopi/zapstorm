@@ -1,5 +1,4 @@
-// Configuração de ambiente para o frontend
+// env.js - Configuração simplificada para o ambiente
 window.env = {
-  // A URL da API deve ser relativa para funcionar em qualquer ambiente
-  API_URL: window.location.origin + '/api'
+  API_URL: "/api"
 }; 

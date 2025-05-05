@@ -3,8 +3,8 @@ import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Base URL para produção
-  base: './',
+  // Base URL para produção - usando '/' para garantir caminhos absolutos
+  base: '/',
   plugins: [react()],
   server: {
     proxy: {
@@ -15,15 +15,20 @@ export default defineConfig({
     }
   },
   build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
     minify: true,
+    sourcemap: false,
     rollupOptions: {
       output: {
-        // Forçar todos os chunks de JS a terem a extensão .js
-        entryFileNames: 'assets/[name]-[hash].js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]',
-        // Forçar o formato CommonJS em vez de ES modules
-        format: 'cjs'
+        // Usar formato IIFE que é mais compatível com navegadores
+        format: 'iife', 
+        // Garantir nomes de arquivos previsíveis
+        entryFileNames: 'assets/[name].[hash].js',
+        chunkFileNames: 'assets/[name].[hash].js',
+        assetFileNames: 'assets/[name].[hash].[ext]',
+        // Evitar código dinâmico para prevenir problemas MIME
+        inlineDynamicImports: true
       }
     }
   },
