@@ -1,5 +1,5 @@
 # Estágio de compilação
-FROM node:20-alpine AS build
+FROM node:18-alpine as build
 
 WORKDIR /app
 
@@ -9,26 +9,24 @@ COPY package*.json ./
 # Instalar dependências
 RUN npm ci
 
-# Instalar terser explicitamente (necessário para minificação)
-RUN npm install -D terser
-
 # Copiar código fonte
 COPY . .
 
 # Construir aplicação
-RUN npx vite build
+RUN npm run build
 
 # Estágio de produção
 FROM nginx:alpine
 
-# Copiar configuração do nginx
+# Copiar os arquivos de build gerados
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copiar arquivo de configuração personalizado do nginx
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copiar script de entrypoint
-COPY --chmod=755 ./docker-entrypoint.sh /
-
-# Copiar arquivos construídos da etapa anterior
-COPY --from=build /app/dist /usr/share/nginx/html
+# Adicionar script para ajustar a URL da API dinamicamente se necessário
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
 
 # Expor porta 80
 EXPOSE 80

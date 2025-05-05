@@ -13,7 +13,15 @@ export default defineConfig({
     }
   },
   build: {
-    minify: true
+    minify: true,
+    rollupOptions: {
+      output: {
+        // Forçar todos os chunks de JS a terem a extensão .js
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]'
+      }
+    }
   },
   optimizeDeps: {
     exclude: ['@mui/icons-material']
