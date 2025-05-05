@@ -266,52 +266,6 @@ class EvolutionApiService {
       this._handleError(error, 'restartInstance');
     }
   }
-
-  // Método para configurar webhook de uma instância
-  async setInstanceWebhook(instanceName, webhookConfig) {
-    try {
-      const { url, enabled = true, events = [] } = webhookConfig;
-      
-      if (!url) {
-        throw new Error('URL do webhook é obrigatória');
-      }
-      
-      const payload = {
-        url: url,
-        enabled: enabled,
-        webhook_by_events: false,
-        webhook_base64: false,
-        events: events.length > 0 ? events : [
-          "QRCODE_UPDATED",
-          "MESSAGES_UPSERT", 
-          "MESSAGES_UPDATE",
-          "MESSAGES_DELETE",
-          "SEND_MESSAGE",
-          "CONNECTION_UPDATE"
-        ]
-      };
-      
-      logger.info(`Configurando webhook para instância ${instanceName}: ${JSON.stringify(payload)}`);
-      
-      const response = await this.axios.post(`/webhook/instance/${instanceName}`, payload);
-      
-      logger.info(`Webhook configurado com sucesso para ${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'setInstanceWebhook');
-    }
-  }
-  
-  // Método para obter a configuração atual do webhook
-  async getInstanceWebhook(instanceName) {
-    try {
-      logger.info(`Obtendo configuração de webhook para instância ${instanceName}`);
-      const response = await this.axios.get(`/webhook/find/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'getInstanceWebhook');
-    }
-  }
 }
 
 module.exports = EvolutionApiService; 
