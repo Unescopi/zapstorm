@@ -82,126 +82,181 @@ exports.getCampaign = async (req, res) => {
 // Criar nova campanha
 exports.createCampaign = async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
-    }
-    
-    const {
-      name,
-      templateId,
+    const { 
+      name, 
+      templateId, 
+      schedule, 
+      contactFilter, 
+      contacts: contactIds,
       instanceId,
-      schedule,
-      contactFilter,
-      contacts,
-      variables,
-      messageVariants,
-      useMessageVariants,
-      antiSpam
+      variableValues
     } = req.body;
     
-    // Validar instância
-    const instance = await Instance.findById(instanceId);
-    if (!instance) {
-      return res.status(404).json({
+    logger.info(`Tentando criar campanha: ${name}, template: ${templateId}, instância: ${instanceId}`);
+    console.log(`Tentando criar campanha: ${name}, template: ${templateId}, instância: ${instanceId}`);
+    
+    // Verificar se há contatos selecionados
+    if ((!contactIds || contactIds.length === 0) && (!contactFilter || Object.keys(contactFilter).length === 0)) {
+      logger.error('Tentativa de criar campanha sem contatos');
+      return res.status(400).json({
         success: false,
-        message: 'Instância não encontrada'
+        message: 'Nenhum contato selecionado para a campanha. Selecione contatos específicos ou defina um filtro.'
       });
     }
     
-    // Validar template
+    // Verificar se os contatos existem, se especificados por ID
+    if (contactIds && contactIds.length > 0) {
+      logger.info(`Verificando existência de ${contactIds.length} contatos`);
+      const contatos = await Contact.find({ _id: { $in: contactIds } });
+      
+      if (contatos.length === 0) {
+        logger.error('Nenhum dos contatos especificados foi encontrado');
+        return res.status(400).json({
+          success: false,
+          message: 'Nenhum dos contatos especificados foi encontrado'
+        });
+      }
+      
+      logger.info(`Encontrados ${contatos.length} contatos de ${contactIds.length} especificados`);
+    }
+    
+    // Verificar se o template existe
     const template = await Template.findById(templateId);
     if (!template) {
-      return res.status(404).json({
+      logger.error(`Template não encontrado: ${templateId}`);
+      console.error(`Template não encontrado: ${templateId}`);
+      return res.status(400).json({
         success: false,
         message: 'Template não encontrado'
       });
     }
     
-    // Converter variáveis recebidas para o formato Map
-    const variableValues = new Map();
-    if (variables && typeof variables === 'object') {
-      Object.keys(variables).forEach(key => {
-        variableValues.set(key, variables[key]);
+    // Verificar se a instância existe
+    logger.info(`Buscando instância com ID: ${instanceId}`);
+    console.log(`Buscando instância com ID: ${instanceId}`);
+    const instance = await Instance.findById(instanceId);
+    if (!instance) {
+      logger.error(`Instância não encontrada: ${instanceId}`);
+      console.error(`Instância não encontrada: ${instanceId}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Instância não encontrada'
       });
     }
     
-    // Criar campanha com valores padrão para métricas
-    const campaign = new Campaign({
+    logger.info(`Instância encontrada: ${instance.instanceName}, status: ${instance.status}`);
+    console.log(`Instância encontrada: ${instance.instanceName}, status: ${instance.status}`);
+    
+    // Verificar filtro de contatos, se especificado
+    if (contactFilter && Object.keys(contactFilter).length > 0) {
+      logger.info(`Verificando filtro de contatos: ${JSON.stringify(contactFilter)}`);
+      
+      try {
+        const contadosContagem = await Contact.countDocuments(contactFilter);
+        
+        if (contadosContagem === 0) {
+          logger.error(`Nenhum contato encontrado com o filtro: ${JSON.stringify(contactFilter)}`);
+          return res.status(400).json({
+            success: false,
+            message: 'Nenhum contato corresponde aos critérios do filtro especificado'
+          });
+        }
+        
+        logger.info(`Encontrados ${contadosContagem} contatos com o filtro especificado`);
+      } catch (filterError) {
+        logger.error(`Erro ao validar filtro de contatos: ${filterError.message}`);
+        return res.status(400).json({
+          success: false,
+          message: 'Filtro de contatos inválido',
+          error: filterError.message
+        });
+      }
+    }
+    
+    // Validar schedule
+    if (schedule && schedule.type === 'scheduled' && !schedule.startAt) {
+      return res.status(400).json({
+        success: false,
+        message: 'Data de agendamento é obrigatória para campanhas agendadas'
+      });
+    }
+    
+    if (schedule && schedule.type === 'recurring') {
+      if (!schedule.recurrencePattern) {
+        return res.status(400).json({
+          success: false,
+          message: 'Padrão de recorrência é obrigatório para campanhas recorrentes'
+        });
+      }
+      
+      if (schedule.recurrencePattern === 'weekly' && !schedule.recurrenceDays?.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Dias da semana são obrigatórios para recorrência semanal'
+        });
+      }
+    }
+    
+    // Criar nova campanha
+    logger.info(`Usuário que está criando a campanha: ${req.user ? req.user.id : 'Não autenticado'}`);
+    console.log(`Usuário que está criando a campanha: ${req.user ? req.user.id : 'Não autenticado'}`);
+    
+    const campaign = await Campaign.create({
       name,
       templateId,
-      instanceId,
-      schedule: schedule || { type: 'immediate' },
-      contactFilter,
-      contacts,
-      variableValues,
-      createdBy: req.user.id,
-      messageVariants: messageVariants || [],
-      useMessageVariants: useMessageVariants || false,
-      antiSpam: antiSpam || {
-        sendTyping: true,
-        typingTime: 3000,
-        messageInterval: {
-          min: 2000,
-          max: 5000
-        },
-        pauseAfter: {
-          count: 20,
-          duration: {
-            min: 15000,
-            max: 45000
-          }
-        },
-        distributeDelivery: true,
-        randomizeContent: false
-      }
+      status: 'draft',
+      schedule: {
+        type: schedule?.type || 'immediate',
+        startAt: schedule?.startAt,
+        endAt: schedule?.endAt,
+        recurrencePattern: schedule?.recurrencePattern || '',
+        recurrenceDays: schedule?.recurrenceDays || [],
+        recurrenceTime: schedule?.recurrenceTime || '09:00'
+      },
+      contactFilter: contactFilter || {},
+      contacts: contactIds || [],
+      variableValues: variableValues || {},
+      metrics: {
+        total: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+        pending: 0
+      },
+      createdBy: req.user?.id || null,
+      instanceId: instance._id
     });
-    
-    // Se for uma campanha imediata, iniciar execução
-    if (schedule && schedule.type === 'immediate') {
-      campaign.status = 'queued';
-    } else {
-      campaign.status = 'draft';
-    }
-    
-    // Salvar campanha
-    await campaign.save();
-    
-    // Gerar variantes automáticas se habilitado e não fornecidas manualmente
-    if (campaign.useMessageVariants && (!campaign.messageVariants || campaign.messageVariants.length === 0)) {
-      // Importar o serviço de variação de mensagens
-      const messageVariationService = require('../services/messageVariationService');
-      
-      // Gerar variantes baseadas no template
-      const templateText = template.content;
-      const generatedVariants = messageVariationService.createVariations(templateText, 5);
-      
-      // Atualizar campanha com as variantes geradas
-      campaign.messageVariants = generatedVariants;
-      await campaign.save();
-      
-      logger.info(`Variantes automáticas geradas para campanha ${campaign._id}`);
-    }
     
     res.status(201).json({
       success: true,
       data: campaign
     });
-    
-    // Se for imediata, iniciar processamento sem aguardar resposta
-    if (schedule && schedule.type === 'immediate') {
-      try {
-        await this.startCampaign({ params: { id: campaign._id } }, { status: () => ({ json: () => {} }) });
-        logger.info(`Campanha imediata ${campaign._id} iniciada automaticamente`);
-      } catch (startError) {
-        logger.error(`Erro ao iniciar campanha imediata ${campaign._id}:`, startError);
-      }
-    }
   } catch (error) {
     logger.error('Erro ao criar campanha:', error);
+    console.error('Erro ao criar campanha:', error.message);
+    
+    // Log mais detalhado sobre o erro
+    if (error.name === 'ValidationError') {
+      logger.error('Erro de validação:', JSON.stringify(error.errors));
+      console.error('Erro de validação:', JSON.stringify(error.errors));
+      return res.status(400).json({
+        success: false,
+        message: 'Erro de validação ao criar campanha',
+        errors: error.errors,
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+    
+    if (error.name === 'CastError') {
+      logger.error('Erro de tipo:', error.path, error.value);
+      console.error('Erro de tipo:', error.path, error.value);
+      return res.status(400).json({
+        success: false,
+        message: `Valor inválido para o campo ${error.path}`,
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Erro ao criar campanha',
@@ -213,29 +268,19 @@ exports.createCampaign = async (req, res) => {
 // Atualizar campanha
 exports.updateCampaign = async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        errors: errors.array()
-      });
-    }
-    
-    const {
-      name,
-      templateId,
+    const { 
+      name, 
+      templateId, 
+      schedule, 
+      contactFilter, 
+      contacts: contactIds,
       instanceId,
-      schedule,
-      contactFilter,
-      contacts,
-      variables,
-      messageVariants,
-      useMessageVariants, 
-      antiSpam
+      variableValues
     } = req.body;
     
-    // Verificar se campanha existe
+    // Buscar campanha
     const campaign = await Campaign.findById(req.params.id);
+    
     if (!campaign) {
       return res.status(404).json({
         success: false,
@@ -243,82 +288,58 @@ exports.updateCampaign = async (req, res) => {
       });
     }
     
-    // Verificar se campanha pode ser atualizada
-    if (['running', 'completed'].includes(campaign.status)) {
+    // Verificar se a campanha já foi iniciada
+    if (campaign.status !== 'draft' && campaign.status !== 'paused') {
       return res.status(400).json({
         success: false,
-        message: 'Campanha em execução ou completa não pode ser alterada'
+        message: 'Não é possível editar uma campanha que já foi iniciada ou concluída'
       });
     }
     
-    // Atualizar variáveis
-    const variableValues = new Map();
-    if (variables && typeof variables === 'object') {
-      Object.keys(variables).forEach(key => {
-        variableValues.set(key, variables[key]);
-      });
+    // Verificar se o template existe
+    if (templateId) {
+      const template = await Template.findById(templateId);
+      if (!template) {
+        return res.status(400).json({
+          success: false,
+          message: 'Template não encontrado'
+        });
+      }
     }
     
-    // Montar objeto de atualização
-    const updateData = {
-      name: name || campaign.name,
-      templateId: templateId || campaign.templateId,
-      instanceId: instanceId || campaign.instanceId,
-      schedule: schedule || campaign.schedule,
-      contactFilter: contactFilter || campaign.contactFilter,
-      variableValues,
-      lastUpdated: Date.now()
-    };
-    
-    // Atualizar contatos se fornecidos
-    if (contacts) {
-      updateData.contacts = contacts;
-    }
-    
-    // Atualizar configurações de variantes de mensagem
-    if (typeof useMessageVariants === 'boolean') {
-      updateData.useMessageVariants = useMessageVariants;
-    }
-    
-    if (messageVariants && Array.isArray(messageVariants)) {
-      updateData.messageVariants = messageVariants;
-    }
-    
-    // Atualizar configurações anti-spam
-    if (antiSpam) {
-      updateData.antiSpam = {
-        ...campaign.antiSpam,
-        ...antiSpam
-      };
+    // Verificar se a instância existe
+    if (instanceId) {
+      const instance = await Instance.findById(instanceId);
+      if (!instance) {
+        return res.status(400).json({
+          success: false,
+          message: 'Instância não encontrada'
+        });
+      }
     }
     
     // Atualizar campanha
     const updatedCampaign = await Campaign.findByIdAndUpdate(
       req.params.id,
-      updateData,
-      { new: true }
+      {
+        name: name || campaign.name,
+        templateId: templateId || campaign.templateId,
+        schedule: schedule ? {
+          type: schedule.type || campaign.schedule.type,
+          startAt: schedule.startAt || campaign.schedule.startAt,
+          endAt: schedule.endAt || campaign.schedule.endAt,
+          recurrencePattern: schedule.recurrencePattern || campaign.schedule.recurrencePattern,
+          recurrenceDays: schedule.recurrenceDays || campaign.schedule.recurrenceDays,
+          recurrenceTime: schedule.recurrenceTime || campaign.schedule.recurrenceTime
+        } : campaign.schedule,
+        contactFilter: contactFilter || campaign.contactFilter,
+        contacts: contactIds || campaign.contacts,
+        instanceId: instanceId || campaign.instanceId,
+        variableValues: variableValues || campaign.variableValues,
+        lastUpdated: Date.now()
+      },
+      { new: true, runValidators: true }
     );
-    
-    // Gerar variantes automáticas se habilitado e não fornecidas
-    if (updatedCampaign.useMessageVariants && 
-        (!updatedCampaign.messageVariants || updatedCampaign.messageVariants.length === 0)) {
-      // Importar o serviço de variação de mensagens
-      const messageVariationService = require('../services/messageVariationService');
-      
-      // Buscar template
-      const template = await Template.findById(updatedCampaign.templateId);
-      if (template) {
-        // Gerar variantes baseadas no template
-        const templateText = template.content;
-        const generatedVariants = messageVariationService.createVariations(templateText, 5);
-        
-        // Atualizar campanha com as variantes geradas
-        updatedCampaign.messageVariants = generatedVariants;
-        await updatedCampaign.save();
-        
-        logger.info(`Variantes automáticas geradas para campanha ${updatedCampaign._id}`);
-      }
-    }
     
     res.status(200).json({
       success: true,

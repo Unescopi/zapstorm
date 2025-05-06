@@ -4,10 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const queueService = require('../services/queueService');
 const logger = require('../utils/logger');
-const rateLimiterService = require('../services/rateLimiterService');
-const messageVariationService = require('../services/messageVariationService');
-const messageWorkerService = require('../services/messageWorkerService');
-const webhookAnalyticsService = require('../services/webhookAnalyticsService');
 
 // Carregar variáveis de ambiente
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
@@ -34,354 +30,404 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/zapstorm')
     process.exit(1);
   });
 
-// Configuração do worker
-const workerSettings = {
-  concurrency: parseInt(process.env.MESSAGE_WORKER_CONCURRENCY || 5)
-};
-
-// Processar mensagens na fila usando RabbitMQ em vez de Bull
-async function processMessage(message) {
-  const { messageId } = message;
-  
+// Função para processar mensagem de texto
+async function processTextMessage(message, instance, evolutionApi) {
   try {
-    logger.info(`Processando mensagem ${messageId}`);
-    
-    // Buscar mensagem por ID
-    const message = await Message.findById(messageId);
-    if (!message) {
-      throw new Error(`Mensagem não encontrada: ${messageId}`);
-    }
-    
-    // Verificar se já foi enviada ou cancelada
-    if (['sent', 'delivered', 'read', 'canceled'].includes(message.status)) {
-      logger.info(`Mensagem ${messageId} já processada (${message.status}), ignorando`);
-      return { success: true, status: message.status, messageId };
-    }
-    
-    // Verificar status da campanha
-    const campaign = await Campaign.findById(message.campaignId);
-    if (!campaign) {
-      await Message.findByIdAndUpdate(messageId, {
-        status: 'failed',
-        errorDetails: 'Campanha não encontrada'
-      });
-      throw new Error(`Campanha não encontrada para mensagem ${messageId}`);
-    }
-    
-    if (campaign.status !== 'running') {
-      await Message.findByIdAndUpdate(messageId, {
-        status: 'failed',
-        errorDetails: `Campanha não está ativa (${campaign.status})`
-      });
-      throw new Error(`Campanha ${campaign._id} não está ativa, status: ${campaign.status}`);
-    }
-    
-    // Verificar se a instância está em pausa anti-spam para esta campanha
-    if (messageWorkerService.isInstancePaused(campaign._id, message.instanceId)) {
-      // Reagendar para mais tarde (pausa anti-spam)
-      const pauseInfo = await Campaign.findById(campaign._id).select('antiSpam');
-      const pauseDuration = pauseInfo?.antiSpam?.pauseAfter?.duration?.max || 30000;
-      
-      await Message.findByIdAndUpdate(messageId, {
-        status: 'scheduled_retry',
-        scheduledRetryAt: new Date(Date.now() + pauseDuration),
-        'antiSpamInfo.pausedForAntiSpam': true,
-        'antiSpamInfo.pauseDuration': pauseDuration
-      });
-      
-      logger.info(`Mensagem ${messageId} em pausa anti-spam, reagendada para ${pauseDuration/1000}s`);
-      
-      // Reagendar usando RabbitMQ com delay
-      await addToQueue(messageId, pauseDuration);
-      
-      return { 
-        success: false, 
-        paused: true, 
-        waitTime: pauseDuration,
-        messageId
-      };
-    }
-    
-    // Enviar mensagem usando serviço anti-spam melhorado
-    const result = await messageWorkerService.sendMessageWithAntiSpam(message);
-    
-    // Atualizar métricas da campanha se mensagem foi enviada com sucesso
-    if (result.success) {
-      await Campaign.findByIdAndUpdate(
-        message.campaignId,
-        { $inc: { 'metrics.sent': 1 } }
-      );
-    }
-    
-    return result;
-  } catch (error) {
-    logger.error(`Erro ao processar mensagem ${messageId}: ${error.message}`);
-    
-    // Atualizar status da mensagem
-    await Message.findByIdAndUpdate(messageId, {
-      status: 'failed',
-      errorDetails: error.message
+    // Atualizar status da mensagem para 'enviando'
+    await Message.findByIdAndUpdate(message._id, {
+      status: 'queued',
+      retries: message.retries + 1
     });
     
-    return { success: false, error: error.message, messageId };
-  }
-}
-
-// Adicionar mensagem à fila usando RabbitMQ
-const addToQueue = async (messageId, delay = 0) => {
-  try {
-    if (delay > 0) {
-      // Usar fila de atraso do RabbitMQ
-      await queueService.enqueueDeferredMessage({ messageId }, delay);
-      logger.debug(`Mensagem ${messageId} adicionada à fila de atraso com delay de ${delay}ms`);
+    // Enviar mensagem via API Evolution
+    console.log(`Tentando enviar mensagem de texto para ${message.contact.phone}`);
+    const response = await evolutionApi.sendText(instance.instanceName, message.contact.phone, message.content);
+    
+    console.log(`Resposta da API Evolution para envio de texto: ${JSON.stringify(response)}`);
+    
+    if (response && response.key) {
+      // Mensagem enviada com sucesso
+      logger.info(`Mensagem enviada com sucesso: ${message._id}`);
+      console.log(`Mensagem enviada com sucesso: ${message._id}`);
+      
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'sent',
+        messageId: response.key.id,
+        sentAt: new Date()
+      });
+      
+      // Atualizar métricas da campanha
+      await Campaign.findByIdAndUpdate(message.campaignId, {
+        $inc: { 'metrics.sent': 1, 'metrics.pending': -1 }
+      });
+      
+      // Atualizar métricas da instância
+      await Instance.findOneAndUpdate({ instanceName: instance.instanceName }, {
+        $inc: { 'metrics.totalSent': 1 }
+      });
+      
+      await checkAndCompleteCampaignIfNeeded(message.campaignId);
+      
+      return true;
     } else {
-      // Usar fila normal
-      await queueService.enqueueMessage({ messageId });
-      logger.debug(`Mensagem ${messageId} adicionada à fila`);
+      throw new Error('Resposta inválida da API Evolution');
     }
-    return true;
   } catch (error) {
-    logger.error(`Erro ao adicionar mensagem ${messageId} à fila: ${error.message}`);
+    logger.error(`Erro ao enviar mensagem ${message._id}:`, error);
+    
+    // Verificar se é um erro recuperável ou não
+    const isRecoverable = !error.message.includes('not-whatsapp-user') && 
+                          !error.message.includes('blocked') &&
+                          message.retries < 3;
+    
+    if (isRecoverable) {
+      // Agendar reenvio
+      const retryDelay = Math.pow(2, message.retries) * 30000; // Backoff exponencial
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'scheduled_retry',
+        errorDetails: error.message,
+        scheduledRetryAt: new Date(Date.now() + retryDelay),
+        $inc: { retries: 1 }
+      });
+      // Atualizar objeto para retry
+      message.retries = (message.retries || 0) + 1;
+      // Enfileirar para retry
+      await queueService.enqueueRetry(message, retryDelay);
+    } else {
+      // Falha permanente
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'failed',
+        errorDetails: error.message
+      });
+      
+      // Atualizar métricas da campanha
+      await Campaign.findByIdAndUpdate(message.campaignId, {
+        $inc: { 'metrics.failed': 1, 'metrics.pending': -1 }
+      });
+      
+      // Atualizar métricas da instância
+      await Instance.findOneAndUpdate({ instanceName: instance.instanceName }, {
+        $inc: { 'metrics.totalFailed': 1 }
+      });
+      
+      // Enfileirar na fila de falhas
+      logger.warn(`Mensagem ${message._id} enviada para DLQ (falha definitiva)`);
+      await queueService.enqueueFailed(message);
+    }
+    
+    await checkAndCompleteCampaignIfNeeded(message.campaignId);
+    
     return false;
   }
-};
+}
 
-// Agendador para mensagens com retry
-const startRetryScheduler = () => {
-  setInterval(async () => {
-    try {
-      // Buscar mensagens com retry agendado para agora
-      const messages = await Message.find({
+// Função para processar mensagem com mídia
+async function processMediaMessage(message, instance, evolutionApi) {
+  try {
+    const { mediaUrl, mediaType, content } = message;
+    
+    // Atualizar status da mensagem para 'enviando'
+    await Message.findByIdAndUpdate(message._id, {
+      status: 'queued',
+      retries: message.retries + 1
+    });
+    
+    // Enviar mensagem via API Evolution
+    console.log(`Tentando enviar mensagem de mídia (${mediaType}) para ${message.contact.phone}, URL: ${mediaUrl}`);
+    const response = await evolutionApi.sendMedia(
+      instance.instanceName, 
+      message.contact.phone, 
+      mediaUrl, 
+      content, 
+      mediaType
+    );
+    
+    console.log(`Resposta da API Evolution para envio de mídia: ${JSON.stringify(response)}`);
+    
+    if (response && response.key) {
+      // Mensagem enviada com sucesso
+      logger.info(`Mensagem com mídia enviada com sucesso: ${message._id}`);
+      console.log(`Mensagem com mídia enviada com sucesso: ${message._id}`);
+      
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'sent',
+        messageId: response.key.id,
+        sentAt: new Date()
+      });
+      
+      // Atualizar métricas da campanha
+      await Campaign.findByIdAndUpdate(message.campaignId, {
+        $inc: { 'metrics.sent': 1, 'metrics.pending': -1 }
+      });
+      
+      // Atualizar métricas da instância
+      await Instance.findOneAndUpdate({ instanceName: instance.instanceName }, {
+        $inc: { 'metrics.totalSent': 1 }
+      });
+      
+      await checkAndCompleteCampaignIfNeeded(message.campaignId);
+      
+      return true;
+    } else {
+      throw new Error('Resposta inválida da API Evolution');
+    }
+  } catch (error) {
+    logger.error(`Erro ao enviar mensagem com mídia ${message._id}:`, error);
+    
+    // Verificar se é um erro recuperável ou não
+    const isRecoverable = !error.message.includes('not-whatsapp-user') && 
+                          !error.message.includes('blocked') &&
+                          message.retries < 3;
+    
+    if (isRecoverable) {
+      // Agendar reenvio
+      const retryDelay = Math.pow(2, message.retries) * 30000; // Backoff exponencial
+      await Message.findByIdAndUpdate(message._id, {
         status: 'scheduled_retry',
-        scheduledRetryAt: { $lte: new Date() },
-        retries: { $lt: 5 } // Limitar a 5 tentativas
-      }).limit(50);
+        errorDetails: error.message,
+        scheduledRetryAt: new Date(Date.now() + retryDelay),
+        $inc: { retries: 1 }
+      });
+      message.retries = (message.retries || 0) + 1;
+      await queueService.enqueueRetry(message, retryDelay);
+    } else {
+      // Falha permanente
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'failed',
+        errorDetails: error.message
+      });
       
-      if (messages.length > 0) {
-        logger.info(`Encontradas ${messages.length} mensagens para retry`);
-        
-        for (const message of messages) {
-          // Verificar se a campanha ainda está ativa
-          const campaign = await Campaign.findById(message.campaignId);
-          if (!campaign || campaign.status !== 'running') {
-            await Message.findByIdAndUpdate(message._id, {
-              status: 'canceled',
-              errorDetails: 'Campanha inativa durante retry'
-            });
-            continue;
-          }
-          
-          // Verificar se instância ainda está conectada
-          const instance = await Instance.findById(message.instanceId);
-          if (!instance || instance.status !== 'connected') {
-            // Verificar se podemos rotacionar para outra instância
-            if (campaign.rotateInstances) {
-              const newInstance = await messageWorkerService.getOptimalInstance(
-                campaign, 
-                message, 
-                instance
-              );
-              
-              if (newInstance && newInstance.status === 'connected') {
-                logger.info(`Rotacionando mensagem ${message._id} para instância ${newInstance.instanceName} durante retry`);
-                message.instanceId = newInstance._id;
-                await message.save();
-              } else {
-                await Message.findByIdAndUpdate(message._id, {
-                  status: 'failed',
-                  errorDetails: 'Instância desconectada e nenhuma alternativa disponível'
-                });
-                continue;
-              }
-            } else {
-              await Message.findByIdAndUpdate(message._id, {
-                status: 'failed',
-                errorDetails: 'Instância desconectada durante retry'
-              });
-              continue;
-            }
-          }
-          
-          // Atualizar status para pending e adicionar à fila novamente
-          await Message.findByIdAndUpdate(message._id, {
-            status: 'pending',
-            scheduledRetryAt: null
-          });
-          
-          // Adicionar à fila com delay aleatório para evitar picos
-          const delay = Math.floor(Math.random() * 5000);
-          await addToQueue(message._id, delay);
-        }
-      }
-    } catch (error) {
-      logger.error(`Erro no scheduler de retries: ${error.message}`);
-    }
-  }, 30000); // Verificar a cada 30 segundos
-};
-
-// Monitorar saúde das filas
-const startQueueMonitor = () => {
-  setInterval(async () => {
-    try {
-      const queueStatus = await queueService.getQueueStats();
+      // Atualizar métricas da campanha
+      await Campaign.findByIdAndUpdate(message.campaignId, {
+        $inc: { 'metrics.failed': 1, 'metrics.pending': -1 }
+      });
       
-      // Registrar estatísticas da fila para monitoramento
-      logger.debug(`Estado da fila: ${JSON.stringify(queueStatus)}`);
+      // Atualizar métricas da instância
+      await Instance.findOneAndUpdate({ instanceName: instance.instanceName }, {
+        $inc: { 'metrics.totalFailed': 1 }
+      });
       
-      // Verificar se há acúmulo anormal de mensagens
-      if (queueStatus.waiting > 1000 || queueStatus.active > 50) {
-        logger.warn(`Acúmulo na fila de mensagens: ${queueStatus.waiting} pendentes, ${queueStatus.active} ativas`);
-        
-        // Verificar taxas das instâncias e ajustar se necessário
-        await checkInstancesHealth();
-      }
-    } catch (error) {
-      logger.error(`Erro no monitor da fila: ${error.message}`);
-    }
-  }, 60000); // Verificar a cada minuto
-};
-
-// Verificar saúde das instâncias e ajustar taxas se necessário
-const checkInstancesHealth = async () => {
-  try {
-    // Acionar o serviço de webhook analytics para verificar saúde das instâncias
-    await webhookAnalyticsService.analyzeInstancesHealth();
-    
-    // Verificar instâncias em quarentena para possível recuperação
-    await webhookAnalyticsService.checkQuarantinedInstances();
-  } catch (error) {
-    logger.error(`Erro ao verificar saúde das instâncias: ${error.message}`);
-  }
-};
-
-// Iniciar o worker para consumir mensagens da fila RabbitMQ
-async function startMessageWorker() {
-  try {
-    // Inicializar serviço de filas
-    if (!queueService.channel) {
-      await queueService.connect();
+      // Enfileirar na fila de falhas
+      logger.warn(`Mensagem ${message._id} enviada para DLQ (falha definitiva)`);
+      await queueService.enqueueFailed(message);
     }
     
-    // Consumir mensagens da fila
-    await queueService.channel.consume(
-      queueService.queues.MESSAGES,
-      async (msg) => {
-        if (msg) {
-          try {
-            const messageData = JSON.parse(msg.content.toString());
-            logger.info(`Recebida mensagem da fila: ${messageData.messageId}`);
-            
-            const result = await processMessage(messageData);
-            
-            if (result && result.success) {
-              logger.info(`Mensagem ${messageData.messageId} processada com sucesso`);
-            } else {
-              logger.warn(`Falha no processamento da mensagem ${messageData.messageId}`);
-            }
-            
-            // Confirmar processamento da mensagem na fila
-            queueService.channel.ack(msg);
-          } catch (error) {
-            logger.error('Erro ao processar mensagem da fila:', error);
-            
-            // Decisão de reprocessamento
-            if (msg.fields.redelivered) {
-              // Se já foi reentregue, não tentar novamente, mover para DLQ
-              queueService.channel.nack(msg, false, false);
-              logger.warn('Mensagem rejeitada e movida para DLQ');
-            } else {
-              // Tentar reprocessar
-              queueService.channel.nack(msg, false, true);
-              logger.info('Mensagem devolvida à fila para nova tentativa');
-            }
-          }
-        }
-      },
-      {
-        noAck: false
-      }
-    );
+    await checkAndCompleteCampaignIfNeeded(message.campaignId);
     
-    // Também consumir a fila de atraso quando mensagens estiverem prontas
-    await queueService.channel.consume(
-      queueService.queues.DELAYED_MESSAGES,
-      async (msg) => {
-        if (msg) {
-          try {
-            const messageData = JSON.parse(msg.content.toString());
-            logger.info(`Recebida mensagem atrasada da fila: ${messageData.messageId}`);
-            
-            // Mover para a fila principal para processamento
-            await queueService.enqueueMessage(messageData);
-            
-            // Confirmar que a mensagem foi movida da fila de atraso
-            queueService.channel.ack(msg);
-          } catch (error) {
-            logger.error('Erro ao processar mensagem da fila de atraso:', error);
-            queueService.channel.nack(msg, false, false);
-          }
-        }
-      },
-      {
-        noAck: false
-      }
-    );
-    
-    logger.info('Worker de mensagens iniciado com sucesso!');
-    
-    // Iniciar scheduler de retries e monitor da fila
-    startRetryScheduler();
-    startQueueMonitor();
-  } catch (error) {
-    logger.error('Erro ao iniciar worker de mensagens:', error);
-    setTimeout(startMessageWorker, 10000);  // Tentar reconectar após 10 segundos
+    return false;
   }
 }
 
-// Verificar se uma campanha está completa
-const checkAndCompleteCampaignIfNeeded = async (campaignId) => {
-  if (!campaignId) return;
+// Processador principal de mensagens
+async function processMessage(message) {
+  logger.info(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
+  console.log(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
   
   try {
-    const campaign = await Campaign.findById(campaignId);
-    if (!campaign) return;
-    
-    // Atualizar lastUpdated
-    campaign.lastUpdated = new Date();
-    
-    // Verificar métricas para determinar se a campanha está completa
-    const totalProcessed = campaign.metrics.sent + campaign.metrics.failed;
-    const totalMessages = campaign.metrics.total;
-    
-    // Se todas as mensagens foram processadas, marcar como concluída
-    if (totalProcessed >= totalMessages) {
-      campaign.status = 'completed';
-      logger.info(`Campanha ${campaignId} marcada como concluída. Total de mensagens: ${totalMessages}, Enviadas: ${campaign.metrics.sent}, Falhas: ${campaign.metrics.failed}`);
+    // Buscar dados completos da mensagem se não estiverem presentes
+    if (!message.contact || !message.contact.phone) {
+      logger.info(`[messageWorker] Buscando dados completos da mensagem ${message._id}`);
+      const messageData = await Message.findById(message._id)
+        .populate('contactId', 'phone name')
+        .populate('campaignId');
+      
+      if (!messageData) {
+        logger.error(`[messageWorker] Mensagem não encontrada no banco: ${message._id}`);
+        return false;
+      }
+      
+      message = messageData;
+      message.contact = message.contactId;
+      logger.info(`[messageWorker] Dados da mensagem recuperados: contato=${message.contact?.phone}, campanha=${message.campaignId?._id}`);
     }
     
-    await campaign.save();
+    // Buscar a campanha se não estiver nos dados da mensagem
+    if (!message.instanceId) {
+      logger.info(`[messageWorker] Buscando dados da campanha ${message.campaignId}`);
+      const campaign = await Campaign.findById(message.campaignId);
+      if (!campaign) {
+        logger.error(`[messageWorker] Campanha não encontrada: ${message.campaignId}`);
+        return false;
+      }
+      message.instanceId = campaign.instanceId;
+      logger.info(`[messageWorker] ID da instância obtido: ${message.instanceId}`);
+    }
+    
+    // Buscar instância
+    const instance = await Instance.findById(message.instanceId);
+    if (!instance) {
+      logger.error(`Instância não encontrada: ${message.instanceId}`);
+      return false;
+    }
+    
+    // Verificar estado da conexão
+    const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+    const connectionState = await evolutionApi.connectionState(instance.instanceName);
+    
+    if (!connectionState || connectionState.instance.state !== 'open') {
+      logger.error(`Instância ${instance.instanceName} não está conectada`);
+      
+      // Tentar reconectar e falhar se não for possível
+      try {
+        await evolutionApi.connectInstance(instance.instanceName);
+        logger.info(`Reconexão de instância ${instance.instanceName} iniciada`);
+      } catch (error) {
+        logger.error(`Falha ao reconectar instância ${instance.instanceName}:`, error);
+        
+        // Enfileirar para retry após 5 minutos
+        await queueService.enqueueRetry(message, 300000);
+        return false;
+      }
+    }
+    
+    // Log detalhado para diagnóstico
+    logger.info(`Processando mensagem ${message._id}, tipo: ${message.mediaType || 'texto'}, URL: ${message.mediaUrl || 'N/A'}`);
+    console.log(`Processando mensagem ${message._id}, tipo: ${message.mediaType || 'texto'}, URL: ${message.mediaUrl || 'N/A'}`);
+    
+    // Verificar tipo de mensagem (texto ou mídia)
+    if (message.mediaUrl && message.mediaType) {
+      logger.info(`Mensagem ${message._id} identificada como mídia (${message.mediaType})`);
+      return await processMediaMessage(message, instance, evolutionApi);
+    } else {
+      // Verificar se tem conteúdo textual válido
+      if (!message.content || typeof message.content !== 'string' || message.content.trim() === '') {
+        logger.error(`Mensagem ${message._id} não possui conteúdo textual válido`);
+        await Message.findByIdAndUpdate(message._id, {
+          status: 'failed',
+          errorDetails: 'Mensagem sem conteúdo textual válido'
+        });
+        return false;
+      }
+      
+      logger.info(`Enviando mensagem para ${message.contact.phone} com conteúdo: ${message.content.substring(0, 50)}...`);
+      console.log(`Enviando mensagem para ${message.contact.phone} com conteúdo: ${message.content.substring(0, 50)}...`);
+      return await processTextMessage(message, instance, evolutionApi);
+    }
   } catch (error) {
-    logger.error(`Erro ao verificar conclusão da campanha ${campaignId}:`, error);
+    logger.error(`[messageWorker] Erro ao processar mensagem ${message._id || 'desconhecida'}:`, error);
+    logger.error(`[messageWorker] Stack trace: ${error.stack}`);
+    return false;
   }
-};
+}
 
-// Iniciar o worker
-startMessageWorker();
+// Iniciar consumo de mensagens
+let retryInterval = null;
+let messageCheckInterval = null;
+async function startWorker() {
+  try {
+    logger.info('[messageWorker] Conectando ao serviço de filas...');
+    await queueService.connect();
+    logger.info('[messageWorker] Conexão com serviço de filas estabelecida com sucesso');
+    
+    // Consumir da fila principal
+    logger.info('[messageWorker] Iniciando consumo da fila principal de mensagens...');
+    await queueService.consumeMessages(processMessage);
+    logger.info('[messageWorker] Consumidor da fila de mensagens iniciado com sucesso');
+    
+    // Consumir da fila de retentativas
+    logger.info('[messageWorker] Iniciando consumo da fila de retentativas...');
+    await queueService.consumeRetry(processMessage);
+    logger.info('[messageWorker] Consumidor da fila de retentativas iniciado com sucesso');
+    
+    // Verificar mensagens que foram agendadas para reenvio
+    retryInterval = setInterval(async () => {
+      try {
+        const retryMessages = await Message.find({
+          status: 'scheduled_retry',
+          scheduledRetryAt: { $lte: new Date() }
+        }).limit(50);
+        
+        logger.info(`[messageWorker] Verificando mensagens agendadas para retry: ${retryMessages.length} encontradas`);
+        
+        for (const message of retryMessages) {
+          await queueService.enqueueMessage(message);
+          await Message.findByIdAndUpdate(message._id, {
+            scheduledRetryAt: null,
+            status: 'queued'
+          });
+          logger.info(`[messageWorker] Mensagem ${message._id} re-enfileirada para retry`);
+        }
+      } catch (error) {
+        logger.error('[messageWorker] Erro ao processar mensagens agendadas para retry:', error);
+      }
+    }, 60000); // Verificar a cada 1 minuto
+    
+    // NOVO: Verificar mensagens pendentes diretamente no banco
+    messageCheckInterval = setInterval(async () => {
+      try {
+        // Buscar campanhas com status running
+        const runningCampaigns = await Campaign.find({ status: 'running' }).limit(10);
+        
+        logger.info(`[messageWorker] Verificando mensagens pendentes de ${runningCampaigns.length} campanhas em execução`);
+        
+        for (const campaign of runningCampaigns) {
+          // Buscar mensagens pendentes desta campanha
+          const pendingMessages = await Message.find({
+            campaignId: campaign._id,
+            status: 'pending'
+          }).limit(50);
+          
+          if (pendingMessages.length > 0) {
+            logger.info(`[messageWorker] Encontradas ${pendingMessages.length} mensagens pendentes para campanha ${campaign._id}`);
+            
+            // Processar cada mensagem diretamente
+            for (const message of pendingMessages) {
+              // Atualizar status para queued
+              await Message.findByIdAndUpdate(message._id, {
+                status: 'queued',
+                retries: (message.retries || 0) + 1
+              });
+              
+              // Enfileirar mensagem
+              await queueService.enqueueMessage(message);
+              logger.info(`[messageWorker] Mensagem ${message._id} enfileirada manualmente`);
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('[messageWorker] Erro ao verificar mensagens pendentes:', error);
+      }
+    }, 120000); // Verificar a cada 2 minutos
+    
+    logger.info('[messageWorker] Worker de mensagens iniciado e pronto para processar');
+    
+  } catch (error) {
+    logger.error('[messageWorker] Erro crítico ao iniciar worker:', error);
+    logger.error(`[messageWorker] Stack trace: ${error.stack}`);
+    process.exit(1);
+  }
+}
 
 // Gerenciamento de processo
 process.on('SIGTERM', async () => {
   logger.info('Worker de mensagens recebeu SIGTERM, encerrando graciosamente...');
+  if (retryInterval) clearInterval(retryInterval);
+  if (messageCheckInterval) clearInterval(messageCheckInterval);
   await queueService.close();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('Worker de mensagens recebeu SIGINT, encerrando graciosamente...');
+  if (retryInterval) clearInterval(retryInterval);
+  if (messageCheckInterval) clearInterval(messageCheckInterval);
   await queueService.close();
   process.exit(0);
 });
 
-module.exports = {
-  addToQueue,
-  startMessageWorker
-}; 
+// Iniciar worker
+startWorker();
+
+// Função utilitária para finalizar campanha immediate ou scheduled
+async function checkAndCompleteCampaignIfNeeded(campaignId) {
+  const campaign = await Campaign.findById(campaignId);
+  if (campaign && ['immediate', 'scheduled'].includes(campaign.schedule.type)) {
+    if (campaign.metrics.pending === 0 && campaign.status === 'running') {
+      await Campaign.findByIdAndUpdate(campaignId, {
+        status: 'completed',
+        lastUpdated: Date.now()
+      });
+      logger.info(`Campanha ${campaign.schedule.type} ${campaignId} concluída automaticamente pelo worker de mensagens.`);
+    }
+  }
+} 

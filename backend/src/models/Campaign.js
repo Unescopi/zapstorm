@@ -64,138 +64,19 @@ const campaignSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
-    read: {
-      type: Number,
-      default: 0
-    },
     failed: {
       type: Number,
       default: 0
     },
-    replies: {
+    pending: {
       type: Number,
       default: 0
-    },
-    blockedDetected: {
-      type: Number,
-      default: 0
-    },
-    healthScore: {
-      type: Number,
-      default: 100
-    },
-    deliveryRate: {
-      type: Number
-    },
-    readRate: {
-      type: Number
-    },
-    failureRate: {
-      type: Number
-    },
-    lastCalculated: {
-      type: Date
     }
   },
   variableValues: {
     type: Map,
     of: String
   },
-  // Variantes de mensagem para evitar detecção de spam
-  messageVariants: [{
-    type: String,
-    trim: true
-  }],
-  useMessageVariants: {
-    type: Boolean,
-    default: false
-  },
-  // Configurações anti-spam
-  antiSpam: {
-    // Simular digitação antes de enviar mensagem
-    sendTyping: {
-      type: Boolean,
-      default: true
-    },
-    // Tempo mínimo de digitação (ms)
-    typingTime: {
-      type: Number,
-      default: 3000
-    },
-    // Intervalo variável entre mensagens (ms)
-    messageInterval: {
-      min: {
-        type: Number,
-        default: 2000
-      },
-      max: {
-        type: Number,
-        default: 5000
-      }
-    },
-    // Pausa a cada N mensagens
-    pauseAfter: {
-      count: {
-        type: Number,
-        default: 20
-      },
-      duration: {
-        min: {
-          type: Number,
-          default: 15000
-        },
-        max: {
-          type: Number,
-          default: 45000
-        }
-      }
-    },
-    // Distribuição de lotes
-    distributeDelivery: {
-      type: Boolean,
-      default: true
-    },
-    // Variação de conteúdo (pequenas diferenças para evitar mensagens idênticas)
-    randomizeContent: {
-      type: Boolean,
-      default: true
-    },
-    // Novas configurações anti-spam
-    avoidSimilarMessages: {
-      type: Boolean,
-      default: true
-    },
-    adaptiveThrottling: {
-      type: Boolean,
-      default: true
-    }
-  },
-  // Rotação de instâncias para campanhas
-  rotateInstances: {
-    type: Boolean,
-    default: false
-  },
-  rotationStrategy: {
-    type: String,
-    enum: ['round-robin', 'health-based', 'load-balanced', 'none'],
-    default: 'health-based'
-  },
-  // Histórico de rotações
-  rotationHistory: [{
-    fromInstance: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Instance'
-    },
-    toInstance: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Instance'
-    },
-    reason: String,
-    timestamp: {
-      type: Date,
-      default: Date.now
-    }
-  }],
   createdAt: {
     type: Date,
     default: Date.now
@@ -222,21 +103,6 @@ campaignSchema.pre('save', function(next) {
   }
   next();
 });
-
-// Método para gerar uma variante aleatória
-campaignSchema.methods.getRandomVariant = function() {
-  if (!this.useMessageVariants || !this.messageVariants || this.messageVariants.length === 0) {
-    return null;
-  }
-  
-  const randomIndex = Math.floor(Math.random() * this.messageVariants.length);
-  return this.messageVariants[randomIndex];
-};
-
-// Índice para otimizar consultas
-campaignSchema.index({ status: 1 });
-campaignSchema.index({ 'schedule.startAt': 1 });
-campaignSchema.index({ 'schedule.type': 1, status: 1 });
 
 const Campaign = mongoose.model('Campaign', campaignSchema);
 

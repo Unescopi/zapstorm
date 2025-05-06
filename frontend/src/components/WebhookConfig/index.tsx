@@ -12,39 +12,18 @@ import {
   CircularProgress,
   Typography,
   FormGroup,
-  Grid,
   Divider,
   Alert,
   Paper,
   InputAdornment,
   IconButton,
-  Tooltip
+  Tooltip,
+  Stack
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import InfoIcon from '@mui/icons-material/Info';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import api from '../../services/api';
-
-type Instance = {
-  _id: string;
-  instanceName: string;
-  webhook?: {
-    enabled: boolean;
-    url: string;
-    secretKey: string;
-    events: {
-      CONNECTION_UPDATE: boolean;
-      QRCODE_UPDATED: boolean;
-      MESSAGES_UPSERT: boolean;
-      MESSAGES_UPDATE: boolean;
-      MESSAGES_DELETE: boolean;
-      SEND_MESSAGE: boolean;
-    };
-    lastReceived?: string;
-    totalReceived?: number;
-    failedWebhooks?: number;
-  };
-};
 
 type WebhookConfigProps = {
   instanceId: string;
@@ -235,8 +214,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
             </Box>
           ) : (
             <Box mt={2}>
-              <Grid container spacing={3}>
-                <Grid item xs={12}>
+              <Stack spacing={3}>
+                <Box>
                   <FormControlLabel
                     control={
                       <Switch
@@ -248,9 +227,9 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                     }
                     label="Ativar webhook"
                   />
-                </Grid>
+                </Box>
 
-                <Grid item xs={12}>
+                <Box>
                   <Alert severity="info" sx={{ mb: 2 }}>
                     <Typography variant="body2">
                       URL do webhook que deve ser configurada na Evolution API:
@@ -283,11 +262,11 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                       </Typography>
                     )}
                   </Alert>
-                </Grid>
+                </Box>
 
                 {formData.enabled && (
                   <>
-                    <Grid item xs={12}>
+                    <Box>
                       <TextField
                         fullWidth
                         label="URL do webhook (opcional para callbacks externos)"
@@ -296,9 +275,9 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                         onChange={handleInputChange}
                         helperText="Deixe em branco para usar apenas o webhook interno do ZapStorm"
                       />
-                    </Grid>
+                    </Box>
                     
-                    <Grid item xs={12}>
+                    <Box>
                       <Box display="flex" alignItems="center">
                         <TextField
                           fullWidth
@@ -318,15 +297,15 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                       <Typography variant="caption" color="text.secondary">
                         Usar para validar a autenticidade dos webhooks recebidos
                       </Typography>
-                    </Grid>
+                    </Box>
                     
-                    <Grid item xs={12}>
+                    <Box>
                       <Typography variant="subtitle1" gutterBottom>
                         Eventos a receber
                       </Typography>
                       <FormGroup>
-                        <Grid container spacing={2}>
-                          <Grid item xs={12} sm={6}>
+                        <Stack direction="row" spacing={2} flexWrap="wrap">
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -337,8 +316,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="Atualizações de conexão"
                             />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -349,8 +328,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="QR Code atualizado"
                             />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -361,8 +340,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="Novas mensagens"
                             />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -373,8 +352,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="Atualizações de mensagens"
                             />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -385,8 +364,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="Mensagens apagadas"
                             />
-                          </Grid>
-                          <Grid item xs={12} sm={6}>
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
                             <FormControlLabel
                               control={
                                 <Switch
@@ -397,14 +376,14 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                               }
                               label="Envio de mensagens"
                             />
-                          </Grid>
-                        </Grid>
+                          </Box>
+                        </Stack>
                       </FormGroup>
-                    </Grid>
+                    </Box>
                   </>
                 )}
 
-                <Grid item xs={12}>
+                <Box>
                   <Divider sx={{ my: 2 }} />
                   <Typography variant="subtitle1" gutterBottom>
                     Estatísticas de Webhook
@@ -415,24 +394,24 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                     </Box>
                   ) : (
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                      <Grid container spacing={2}>
-                        <Grid item xs={12} sm={4}>
+                      <Stack direction="row" spacing={2} flexWrap="wrap">
+                        <Box sx={{ width: { xs: '100%', sm: '30%' } }}>
                           <Typography variant="body2" color="text.secondary">
                             Total recebido:
                           </Typography>
                           <Typography variant="body1" fontWeight="medium">
                             {stats.totalReceived}
                           </Typography>
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
+                        </Box>
+                        <Box sx={{ width: { xs: '100%', sm: '30%' } }}>
                           <Typography variant="body2" color="text.secondary">
                             Último recebido:
                           </Typography>
                           <Typography variant="body1" fontWeight="medium">
                             {formatDate(stats.lastReceived)}
                           </Typography>
-                        </Grid>
-                        <Grid item xs={12} sm={4}>
+                        </Box>
+                        <Box sx={{ width: { xs: '100%', sm: '30%' } }}>
                           <Typography variant="body2" color="text.secondary">
                             Falhas:
                           </Typography>
@@ -443,13 +422,13 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                           >
                             {stats.failedWebhooks}
                           </Typography>
-                        </Grid>
-                      </Grid>
+                        </Box>
+                      </Stack>
                     </Paper>
                   )}
-                </Grid>
+                </Box>
                 
-                <Grid item xs={12}>
+                <Box>
                   <Button 
                     variant="text" 
                     color="primary" 
@@ -459,8 +438,8 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                   >
                     Ver logs de webhooks
                   </Button>
-                </Grid>
-              </Grid>
+                </Box>
+              </Stack>
             </Box>
           )}
         </DialogContent>

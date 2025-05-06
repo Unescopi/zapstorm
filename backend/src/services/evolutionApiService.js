@@ -19,45 +19,124 @@ class EvolutionApiService {
     logger.info(`EvolutionApiService inicializado com URL: ${serverUrl}`);
   }
 
-  // Tratar erros de forma centralizada
-  _handleError(error, methodName) {
-    let errorMessage = `Erro no método ${methodName}`;
-    let statusCode = 500;
+  // Método auxiliar para lidar com erros
+  _handleError(error, method) {
+    console.error(`Erro ao chamar API Evolution (${method}):`, error.message);
+    logger.error(`Erro ao chamar API Evolution (${method}):`, error);
     
     if (error.response) {
-      statusCode = error.response.status;
-      if (error.response.data && error.response.data.error) {
-        errorMessage = `${errorMessage}: ${error.response.data.error}`;
-      } else {
-        errorMessage = `${errorMessage}: ${error.response.statusText}`;
-      }
+      // A requisição foi feita e o servidor respondeu com status diferente de 2xx
+      console.error(`Status: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+      logger.error(`Status: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+      throw new Error(`Erro na API Evolution (${error.response.status}): ${JSON.stringify(error.response.data)}`);
     } else if (error.request) {
-      errorMessage = `${errorMessage}: Sem resposta do servidor`;
+      // A requisição foi feita mas não houve resposta
+      console.error('Sem resposta do servidor');
+      logger.error('Sem resposta do servidor');
+      throw new Error('Servidor da API Evolution não respondeu');
     } else {
-      errorMessage = `${errorMessage}: ${error.message}`;
+      // Erro na configuração da requisição
+      throw error;
     }
-    
-    console.error(errorMessage);
-    logger.error(errorMessage);
-    
-    // Lançar uma exceção formatada
-    const formattedError = new Error(errorMessage);
-    formattedError.statusCode = statusCode;
-    formattedError.originalError = error;
-    throw formattedError;
   }
 
   // Obter instâncias
-  async getInstances() {
+  async fetchInstances() {
     try {
       const response = await this.axios.get('/instance/fetchInstances');
       return response.data;
     } catch (error) {
-      this._handleError(error, 'getInstances');
+      this._handleError(error, 'fetchInstances');
     }
   }
   
-  // Obter estado da conexão
+  // Método estático para obter instâncias utilizando as variáveis de ambiente
+  static async getAllInstances() {
+    try {
+      const apiUrl = process.env.EVOLUTION_API_URL;
+      const apiToken = process.env.EVOLUTION_API_TOKEN;
+      
+      if (!apiUrl || !apiToken) {
+        console.error('Variáveis de ambiente EVOLUTION_API_URL e EVOLUTION_API_TOKEN não configuradas');
+        throw new Error('Variáveis de ambiente EVOLUTION_API_URL e EVOLUTION_API_TOKEN não configuradas');
+      }
+      
+      console.log(`Conectando à Evolution API em: ${apiUrl}`);
+      console.log(`Usando token: ${apiToken.substring(0, 8)}...`);
+      logger.info(`Conectando à Evolution API em: ${apiUrl}`);
+      logger.info(`Usando token: ${apiToken.substring(0, 8)}...`);
+      
+      const apiClient = axios.create({
+        baseURL: apiUrl,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': apiToken
+        },
+        timeout: 30000
+      });
+      
+      console.log('Enviando requisição para /instance/fetchInstances');
+      logger.info('Enviando requisição para /instance/fetchInstances');
+      const response = await apiClient.get('/instance/fetchInstances');
+      
+      console.log(`Resposta recebida com status: ${response.status}`);
+      console.log(`Resposta completa: ${JSON.stringify(response.data, null, 2)}`);
+      logger.info(`Resposta recebida com status: ${response.status}`);
+      logger.info(`Resposta completa: ${JSON.stringify(response.data, null, 2)}`);
+      
+      // Verificar formato da resposta
+      if (!response.data) {
+        console.error('Resposta vazia da Evolution API');
+        logger.error('Resposta vazia da Evolution API');
+        throw new Error('Resposta vazia da Evolution API');
+      }
+      
+      // A API Evolution pode retornar diretamente um array ou um objeto com propriedade 'instances'
+      let instances;
+      if (Array.isArray(response.data)) {
+        console.log(`A resposta é um array com ${response.data.length} instâncias`);
+        logger.info(`A resposta é um array com ${response.data.length} instâncias`);
+        instances = response.data;
+      } else if (response.data.instances && Array.isArray(response.data.instances)) {
+        console.log(`A resposta tem uma propriedade 'instances' com ${response.data.instances.length} instâncias`);
+        logger.info(`A resposta tem uma propriedade 'instances' com ${response.data.instances.length} instâncias`);
+        instances = response.data.instances;
+      } else {
+        console.log('A resposta não está em um formato esperado. Tentando tratar como um objeto único');
+        logger.info('A resposta não está em um formato esperado. Tentando tratar como um objeto único');
+        // Talvez seja apenas uma instância retornada como objeto
+        instances = [response.data];
+      }
+      
+      // Log da estrutura da primeira instância (se existir)
+      if (instances.length > 0) {
+        console.log(`Exemplo da primeira instância: ${JSON.stringify(instances[0], null, 2)}`);
+        logger.info(`Exemplo da primeira instância: ${JSON.stringify(instances[0], null, 2)}`);
+      }
+      
+      return { instances };
+    } catch (error) {
+      console.error('Erro ao buscar instâncias da Evolution API:', error.message);
+      logger.error('Erro ao buscar instâncias da Evolution API:', error);
+      if (error.response) {
+        console.error(`Status: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+        logger.error(`Status: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  // Conectar instância
+  async connectInstance(instanceName) {
+    try {
+      const response = await this.axios.get(`/instance/connect/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'connectInstance');
+    }
+  }
+
+  // Verificar estado da conexão
   async connectionState(instanceName) {
     try {
       const response = await this.axios.get(`/instance/connectionState/${instanceName}`);
@@ -66,110 +145,19 @@ class EvolutionApiService {
       this._handleError(error, 'connectionState');
     }
   }
-  
-  // Iniciar instância
-  async startInstance(instanceName) {
-    try {
-      const payload = {
-        instanceName: instanceName
-      };
-      
-      const response = await this.axios.post('/instance/create', payload);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'startInstance');
-    }
-  }
-  
+
   // Desconectar instância
-  async disconnectInstance(instanceName) {
+  async logoutInstance(instanceName) {
     try {
       const response = await this.axios.delete(`/instance/logout/${instanceName}`);
       return response.data;
     } catch (error) {
-      this._handleError(error, 'disconnectInstance');
-    }
-  }
-  
-  // Reconectar instância
-  async connectInstance(instanceName) {
-    try {
-      const response = await this.axios.put(`/instance/connect/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'connectInstance');
-    }
-  }
-  
-  // Restart instance
-  async restartInstance(instanceName) {
-    try {
-      const response = await this.axios.put(`/instance/restart/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'restartInstance');
-    }
-  }
-  
-  // Delete instance
-  async deleteInstance(instanceName) {
-    try {
-      const response = await this.axios.delete(`/instance/delete/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'deleteInstance');
-    }
-  }
-  
-  // Get QR Code
-  async getQrcode(instanceName) {
-    try {
-      const response = await this.axios.get(`/instance/qrcode/${instanceName}`);
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'getQrcode');
-    }
-  }
-  
-  // Simular digitação
-  async sendChatPresenceStatus(instanceName, to, presence = 'composing', typingDuration = 3000) {
-    try {
-      if (!instanceName || !to) {
-        throw new Error('Nome da instância e número de destino são obrigatórios');
-      }
-      
-      const payload = {
-        number: to,
-        presence: presence, // 'composing' (digitando) ou 'paused' (parou de digitar)
-      };
-      
-      logger.info(`Enviando status de digitação para ${to} (${presence})`);
-      
-      const response = await this.axios.post(`/chat/presenceSubscribe/${instanceName}`, payload);
-      
-      // Aguardar o tempo de digitação antes de retornar (não bloqueia o evento)
-      if (presence === 'composing' && typingDuration > 0) {
-        await new Promise(resolve => setTimeout(resolve, typingDuration));
-        
-        // Opcionalmente, enviar status "parou de digitar" após o tempo
-        if (typingDuration > 2000) {
-          try {
-            await this.sendChatPresenceStatus(instanceName, to, 'paused', 0);
-          } catch (err) {
-            // Ignora erro ao pausar digitação
-            logger.warn(`Erro ao enviar status 'paused' para ${to}: ${err.message}`);
-          }
-        }
-      }
-      
-      return response.data;
-    } catch (error) {
-      this._handleError(error, 'sendChatPresenceStatus');
+      this._handleError(error, 'logoutInstance');
     }
   }
 
   // Enviar mensagem de texto
-  async sendText(instanceName, to, text, options = {}) {
+  async sendText(instanceName, to, text) {
     try {
       // Verificar se o texto é válido
       if (!text || typeof text !== 'string') {
@@ -186,24 +174,12 @@ class EvolutionApiService {
         throw new Error('Texto está vazio após limpeza');
       }
       
-      // Enviar status "digitando" antes da mensagem se solicitado
-      if (options.sendTyping) {
-        try {
-          const typingDuration = options.typingTime || 3000;
-          await this.sendChatPresenceStatus(instanceName, to, 'composing', typingDuration);
-          logger.info(`Status "digitando" enviado para ${to} por ${typingDuration}ms`);
-        } catch (typingError) {
-          logger.warn(`Erro ao enviar status "digitando": ${typingError.message}`);
-          // Continua o envio mesmo se falhar o status de digitação
-        }
-      }
-      
       const payload = {
         number: to,
         options: {
-          delay: options.delay || 1200,
-          presence: options.presence || "composing",
-          linkPreview: options.linkPreview !== false
+          delay: 1200,
+          presence: "composing",
+          linkPreview: true
         }
       };
       
@@ -221,7 +197,7 @@ class EvolutionApiService {
   }
 
   // Enviar mensagem com mídia
-  async sendMedia(instanceName, to, mediaUrl, caption, mediaType, options = {}) {
+  async sendMedia(instanceName, to, mediaUrl, caption, mediaType) {
     try {
       // Validação básica
       if (!mediaUrl) {
@@ -236,26 +212,14 @@ class EvolutionApiService {
         throw new Error(`Tipo de mídia inválido: ${mediaType}`);
       }
       
-      // Enviar status "digitando" antes da mensagem se solicitado
-      if (options.sendTyping) {
-        try {
-          const typingDuration = options.typingTime || 3000;
-          await this.sendChatPresenceStatus(instanceName, to, 'composing', typingDuration);
-          logger.info(`Status "digitando" enviado para ${to} por ${typingDuration}ms`);
-        } catch (typingError) {
-          logger.warn(`Erro ao enviar status "digitando": ${typingError.message}`);
-          // Continua o envio mesmo se falhar o status de digitação
-        }
-      }
-      
       const payload = {
         number: to,
         mediatype: mediaType, // image, video, audio, document
         media: mediaUrl,
         caption: caption || '',
         options: {
-          delay: options.delay || 1200,
-          presence: options.presence || 'composing'
+          delay: 1200,
+          presence: 'composing'
         }
       };
       
@@ -268,17 +232,41 @@ class EvolutionApiService {
       this._handleError(error, 'sendMedia');
     }
   }
-  
-  // Obter perfil
-  async getProfile(instanceName) {
+
+  // Criar nova instância
+  async createInstance(instanceName) {
     try {
-      const response = await this.axios.get(`/chat/fetchProfile/${instanceName}`);
+      const payload = {
+        instanceName
+      };
+      
+      const response = await this.axios.post('/instance/create', payload);
       return response.data;
     } catch (error) {
-      this._handleError(error, 'getProfile');
+      this._handleError(error, 'createInstance');
     }
   }
-  
+
+  // Deletar instância
+  async deleteInstance(instanceName) {
+    try {
+      const response = await this.axios.delete(`/instance/delete/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'deleteInstance');
+    }
+  }
+
+  // Reiniciar instância
+  async restartInstance(instanceName) {
+    try {
+      const response = await this.axios.put(`/instance/restart/${instanceName}`);
+      return response.data;
+    } catch (error) {
+      this._handleError(error, 'restartInstance');
+    }
+  }
+
   // Configurar webhook
   async configureWebhook(instanceName, webhookUrl, options = {}) {
     try {
