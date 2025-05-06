@@ -6,8 +6,8 @@
 const logger = require('../utils/logger');
 const queueService = require('./queueService');
 
-// Singleton do QueueService
-const queue = new queueService();
+// Usar o singleton do QueueService (já é uma instância)
+const queue = queueService;
 
 // Adicionar nova fila para webhooks
 queue.queues.WEBHOOKS = 'zapstorm-webhooks';
@@ -79,6 +79,21 @@ async function addToQueue(data) {
     return result;
   } catch (error) {
     logger.error('Erro ao enfileirar webhook:', error);
+    return false;
+  }
+}
+
+/**
+ * Verificar se o serviço de fila está disponível
+ */
+async function isAvailable() {
+  try {
+    if (!queue.channel) {
+      await queue.connect();
+    }
+    return true;
+  } catch (error) {
+    logger.error('Serviço de fila não disponível:', error);
     return false;
   }
 }
@@ -161,13 +176,6 @@ async function getQueueStatus() {
       stats: {}
     };
   }
-}
-
-/**
- * Verificar se a fila está disponível
- */
-function isAvailable() {
-  return queue.channel !== null;
 }
 
 /**
