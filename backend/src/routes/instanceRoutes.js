@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const instanceController = require('../controllers/instanceController');
-const { authMiddleware, adminMiddleware } = require('../middlewares/authMiddleware');
+const { authMiddleware, adminMiddleware, protect } = require('../middlewares/authMiddleware');
 
 // Aplicar middleware de autenticação em todas as rotas
 router.use(authMiddleware);
+
+// Proteger todas as rotas
+router.use(protect);
 
 // Rota para sincronizar instâncias da Evolution API
 router.post('/sync-from-evolution', instanceController.syncFromEvolution);
@@ -31,5 +34,9 @@ router.post('/:id/logout', instanceController.logoutInstance);
 
 // Rota para reiniciar instância
 router.post('/:id/restart', instanceController.restartInstance);
+
+// Rotas de webhook
+router.post('/:id/webhook', instanceController.configureWebhook);
+router.get('/:id/webhook/stats', instanceController.getWebhookStats);
 
 module.exports = router; 

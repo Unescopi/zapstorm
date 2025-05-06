@@ -1,36 +1,32 @@
 FROM node:18-alpine
 
-# Diretório de trabalho
+# Criar diretório da aplicação
 WORKDIR /app
 
-# Definir variáveis de ambiente
-ENV NODE_ENV=production
-ENV FORCE_COLOR=1
-ENV LOG_LEVEL=debug
+# Instalar dependências necessárias para compilações nativas
+RUN apk add --no-cache python3 make g++ tzdata
 
-# Não armazenar logs em buffer
-ENV NODE_OPTIONS=--no-warnings
-ENV PYTHONUNBUFFERED=1
-ENV NODE_BUFFERRED=0
+# Definir timezone
+ENV TZ=America/Sao_Paulo
 
-# Copiar arquivos de dependências
+# Copiar package.json e package-lock.json
 COPY package*.json ./
 
 # Instalar dependências
-RUN npm ci --only=production
+RUN npm ci --omit=dev --ignore-scripts
 
-# Remover bcrypt que não funciona e adicionar bcryptjs
-RUN npm uninstall bcrypt && \
-    npm install bcryptjs && \
-    mkdir -p /app/node_modules/bcrypt
-
+# Copiar o restante do código da aplicação
 COPY . .
 
-# Criar um arquivo de substituição para bcrypt que usa bcryptjs
-RUN echo 'module.exports = require("bcryptjs");' > /app/node_modules/bcrypt.js && \
-    echo '{ "name": "bcrypt", "main": "../bcrypt.js" }' > /app/node_modules/bcrypt/package.json
+# Criar diretório de logs
+RUN mkdir -p logs
 
-# Criar diretório de logs e garantir permissões
-RUN mkdir -p logs && chmod -R 777 logs
+# Configurar variáveis de ambiente para workers
+ENV NODE_ENV=production
+ENV MAX_MEMORY=512
 
+# Otimizações para Node.js em ambiente de produção
+ENV NODE_OPTIONS="--max-old-space-size=${MAX_MEMORY} --max-http-header-size=16384"
+
+# Comando padrão (será sobrescrito no docker-compose)
 CMD ["node", "src/workers/messageWorker.js"] 

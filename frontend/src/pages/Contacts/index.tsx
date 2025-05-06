@@ -682,9 +682,9 @@ const Contacts: React.FC = () => {
                         <TableCell padding="checkbox">
                           <Checkbox checked={isItemSelected} />
                         </TableCell>
-                        <TableCell>{contact.name}</TableCell>
-                        <TableCell>{formatPhoneNumber(contact.phone)}</TableCell>
-                        <TableCell>{contact.email || '-'}</TableCell>
+                      <TableCell>{contact.name}</TableCell>
+                      <TableCell>{formatPhoneNumber(contact.phone)}</TableCell>
+                      <TableCell>{contact.email || '-'}</TableCell>
                         <TableCell>
                           {contact.tags && contact.tags.length > 0 ? (
                             <Box display="flex" flexWrap="wrap" gap={0.5}>
@@ -694,34 +694,34 @@ const Contacts: React.FC = () => {
                             </Box>
                           ) : '-'}
                         </TableCell>
-                        <TableCell>{new Date(contact.createdAt).toLocaleString()}</TableCell>
-                        <TableCell align="center">
+                      <TableCell>{new Date(contact.createdAt).toLocaleString()}</TableCell>
+                      <TableCell align="center">
                           <Tooltip title="Editar">
-                            <IconButton 
-                              color="primary" 
-                              size="small" 
+                        <IconButton 
+                          color="primary" 
+                          size="small" 
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleOpenDialog(contact);
                               }}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
                           </Tooltip>
                           <Tooltip title="Excluir">
-                            <IconButton 
-                              color="error" 
-                              size="small"
+                        <IconButton 
+                          color="error" 
+                          size="small"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 confirmDelete(contact);
                               }}
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
                           </Tooltip>
-                        </TableCell>
-                      </TableRow>
+                      </TableCell>
+                    </TableRow>
                     );
                   })
                 ) : (

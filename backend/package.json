@@ -9,6 +9,7 @@
     "worker:messages": "node src/workers/messageWorker.js",
     "worker:scheduler": "node src/workers/schedulerWorker.js",
     "worker:alerts": "node src/workers/alertWorker.js",
+    "worker:webhooks": "node src/workers/webhookWorker.js",
     "start:all": "concurrently \"npm run dev\" \"npm run worker:messages\" \"npm run worker:scheduler\" \"npm run worker:alerts\"",
     "seed": "node src/utils/seed.js",
     "test": "echo \"Error: no test specified\" && exit 1"

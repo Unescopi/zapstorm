@@ -4,45 +4,26 @@ const instanceSchema = new mongoose.Schema({
   instanceName: {
     type: String,
     required: [true, 'Nome da instância é obrigatório'],
-    trim: true,
-    unique: true
+    unique: true,
+    trim: true
   },
-  instanceId: {
+  displayName: {
     type: String,
-  },
-  status: {
-    type: String,
-    enum: ['disconnected', 'connecting', 'connected', 'failed'],
-    default: 'disconnected'
+    trim: true
   },
   serverUrl: {
     type: String,
-    required: [true, 'URL do servidor da API Evolution é obrigatória'],
+    required: [true, 'URL do servidor é obrigatória'],
     trim: true
   },
   apiKey: {
     type: String,
-    required: [true, 'Chave da API Evolution é obrigatória'],
     trim: true
   },
-  profileName: {
+  status: {
     type: String,
-    trim: true
-  },
-  profilePictureUrl: {
-    type: String,
-    trim: true
-  },
-  profileStatus: {
-    type: String,
-    trim: true
-  },
-  owner: {
-    type: String,
-    trim: true
-  },
-  lastConnection: {
-    type: Date
+    enum: ['disconnected', 'connecting', 'connected', 'warning', 'error', 'quarantine'],
+    default: 'disconnected'
   },
   webhook: {
     url: {
@@ -50,57 +31,35 @@ const instanceSchema = new mongoose.Schema({
       trim: true
     },
     events: [{
-      type: String,
-      enum: ['message', 'message-status', 'connection-status']
-    }]
+      type: String
+    }],
+    isActive: {
+      type: Boolean,
+      default: false
+    }
   },
-  throttling: {
-    perSecond: {
-      type: Number,
-      default: 1,
-      min: 1,
-      max: 30
-    },
-    perMinute: {
-      type: Number,
-      default: 20,
-      min: 1,
-      max: 250
-    },
-    perHour: {
-      type: Number,
-      default: 1000,
-      min: 1,
-      max: 5000
-    },
-    perBatch: {
-      type: Number,
-      default: 50,
-      min: 1,
-      max: 500,
-      description: 'Número máximo de mensagens por lote'
-    },
-    batchDelay: {
-      type: Number,
-      default: 5000,
-      min: 1000,
-      max: 60000,
-      description: 'Intervalo entre lotes em milissegundos'
-    },
-    retryDelay: {
-      type: Number,
-      default: 300000, // 5 minutos
-      min: 60000,
-      max: 3600000,
-      description: 'Tempo de espera para nova tentativa em caso de falha (ms)'
-    },
-    maxRetries: {
-      type: Number,
-      default: 3,
-      min: 0,
-      max: 10,
-      description: 'Número máximo de tentativas para mensagens com falha'
-    },
+  qrcode: {
+    type: String
+  },
+  profile: {
+    name: String,
+    description: String,
+    phone: String,
+    profilePictureUrl: String
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  lastConnection: {
+    type: Date
+  },
+  lastDisconnection: {
+    type: Date
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   },
   metrics: {
     totalSent: {
@@ -111,28 +70,188 @@ const instanceSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
+    totalRead: {
+      type: Number,
+      default: 0
+    },
     totalFailed: {
       type: Number,
       default: 0
+    },
+    messagesSentToday: {
+      type: Number,
+      default: 0
+    },
+    messagesSentThisWeek: {
+      type: Number,
+      default: 0
+    },
+    deliveryRate: {
+      type: Number,
+      default: 0
+    },
+    readRate: {
+      type: Number,
+      default: 0
+    },
+    lastUpdateTime: {
+      type: Date,
+      default: Date.now
     }
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
+  // Configurações de throttling para evitar bloqueios
+  throttling: {
+    perMinute: {
+      type: Number,
+      default: 20,
+      min: 1,
+      max: 60
+    },
+    perHour: {
+      type: Number,
+      default: 300,
+      min: 10,
+      max: 1000
+    },
+    batchSize: {
+      type: Number,
+      default: 10,
+      min: 1,
+      max: 50
+    },
+    batchDelay: {
+      type: Number,
+      default: 3000,
+      min: 1000,
+      max: 30000
+    }
   },
-  lastUpdated: {
-    type: Date,
-    default: Date.now
+  // Status de saúde da instância para análise anti-spam e bloqueio
+  health: {
+    status: {
+      type: String,
+      enum: ['healthy', 'warning', 'critical', 'unknown'],
+      default: 'unknown'
+    },
+    lastCheckTimestamp: {
+      type: Date
+    },
+    successRate: {
+      type: Number,
+      default: 1.0
+    },
+    blockSuspicion: {
+      type: Boolean,
+      default: false
+    },
+    suspicionScore: {
+      type: Number,
+      default: 0
+    },
+    blockWarningCount: {
+      type: Number,
+      default: 0
+    },
+    details: {
+      type: String
+    },
+    messageVolume24h: {
+      type: Number,
+      default: 0
+    },
+    quarantineReason: {
+      type: String
+    },
+    quarantineTimestamp: {
+      type: Date
+    },
+    recoveryTimestamp: {
+      type: Date
+    },
+    previousQuarantineReason: {
+      type: String
+    }
+  },
+  // Histórico de ajustes automáticos do sistema anti-spam
+  lastAdjustment: {
+    timestamp: {
+      type: Date
+    },
+    reason: {
+      type: String
+    },
+    previousSettings: {
+      type: Object
+    }
+  },
+  // Configurações anti-spam padrão para campanhas desta instância
+  defaultAntiSpamSettings: {
+    sendTyping: {
+      type: Boolean,
+      default: true
+    },
+    typingTime: {
+      type: Number,
+      default: 3000
+    },
+    messageInterval: {
+      min: {
+        type: Number,
+        default: 2000
+      },
+      max: {
+        type: Number,
+        default: 5000
+      }
+    },
+    pauseAfter: {
+      count: {
+        type: Number,
+        default: 20
+      },
+      duration: {
+        min: {
+          type: Number,
+          default: 15000
+        },
+        max: {
+          type: Number,
+          default: 45000
+        }
+      }
+    },
+    distributeDelivery: {
+      type: Boolean,
+      default: true
+    },
+    randomizeContent: {
+      type: Boolean,
+      default: true
+    }
   }
 });
 
-// Middleware para atualizar lastUpdated quando instância for modificada
-instanceSchema.pre('save', function(next) {
-  if (this.isModified() && !this.isNew) {
-    this.lastUpdated = Date.now();
-  }
-  next();
-});
+// Método para verificar se a instância está em bom estado para uso
+instanceSchema.methods.isHealthy = function() {
+  return this.status === 'connected' && 
+         (!this.health.status || this.health.status === 'healthy') &&
+         !this.health.blockSuspicion;
+};
+
+// Método para obter limites atuais de taxa
+instanceSchema.methods.getRateLimits = function() {
+  return {
+    perMinute: this.throttling?.perMinute || 20,
+    perHour: this.throttling?.perHour || 300,
+    batchSize: this.throttling?.batchSize || 10,
+    batchDelay: this.throttling?.batchDelay || 3000
+  };
+};
+
+// Índices para otimizar consultas
+instanceSchema.index({ instanceName: 1 });
+instanceSchema.index({ status: 1 });
+instanceSchema.index({ 'health.status': 1 });
 
 const Instance = mongoose.model('Instance', instanceSchema);
 

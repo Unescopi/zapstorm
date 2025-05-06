@@ -1,6 +1,7 @@
 const express = require('express');
 const authMiddleware = require('../middlewares/auth');
 const { checkPermission } = require('../middlewares/permissions');
+const router = express.Router();
 
 // Importar os roteadores
 const authRoutes = require('./authRoutes');
@@ -9,9 +10,12 @@ const instanceRoutes = require('./instanceRoutes');
 const contactRoutes = require('./contactRoutes');
 const templateRoutes = require('./templateRoutes');
 const campaignRoutes = require('./campaignRoutes');
-// Removendo a rota de mensagens que não é necessária
-// const messageRoutes = require('./messageRoutes');
+const messageRoutes = require('./messageRoutes');
 const healthRoutes = require('./healthRoutes');
+const listRoutes = require('./listRoutes');
+const dashboardRoutes = require('./dashboardRoutes');
+const webhookRoutes = require('./webhookRoutes');
+const schedulerRoutes = require('./schedulerRoutes');
 
 // Exportar função para configurar rotas
 module.exports = (app) => {
@@ -30,6 +34,9 @@ module.exports = (app) => {
   app.use('/contacts', contactRoutes);
   app.use('/templates', templateRoutes);
   app.use('/campaigns', campaignRoutes);
-  // Removendo a rota de mensagens
-  // app.use('/messages', messageRoutes);
+  app.use('/messages', messageRoutes);
+  app.use('/lists', listRoutes);
+  app.use('/dashboard', dashboardRoutes);
+  app.use('/webhooks', webhookRoutes);
+  app.use('/scheduler', schedulerRoutes);
 }; 

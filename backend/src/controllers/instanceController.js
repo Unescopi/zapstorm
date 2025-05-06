@@ -500,4 +500,108 @@ exports.restartInstance = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+// Configurar webhook para uma instância
+exports.configureWebhook = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled, url, events, secretKey } = req.body;
+    
+    // Validar URL se estiver habilitado
+    if (enabled && (!url || !url.startsWith('http'))) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL de webhook inválida'
+      });
+    }
+    
+    // Atualizar configuração de webhook
+    const instance = await Instance.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          'webhook.enabled': enabled,
+          'webhook.url': url,
+          'webhook.secretKey': secretKey,
+          'webhook.events': events || {}
+        }
+      },
+      { new: true }
+    ).select('-apiKey');
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    // Configurar webhook na Evolution API se necessário
+    if (enabled) {
+      try {
+        const evolutionApi = new EvolutionApiService(instance.serverUrl, instance.apiKey);
+        const webhookUrl = `${process.env.WEBHOOK_BASE_URL || req.protocol + '://' + req.get('host')}/webhook?instance=${instance.instanceName}`;
+        
+        // Configurar webhook na Evolution API
+        await evolutionApi.configureWebhook(instance.instanceName, webhookUrl, {
+          events: Object.keys(events || {}).filter(event => events[event])
+        });
+        
+        logger.info(`Webhook configurado na Evolution API para instância ${instance.instanceName}`);
+      } catch (apiError) {
+        logger.error(`Erro ao configurar webhook na Evolution API: ${apiError.message}`);
+        // Continuar mesmo com erro, pois a instância já foi atualizada no ZapStorm
+      }
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: instance
+    });
+  } catch (error) {
+    logger.error('Erro ao configurar webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao configurar webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Obter estatísticas de webhook
+exports.getWebhookStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const instance = await Instance.findById(id).select('instanceName webhook');
+    
+    if (!instance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Instância não encontrada'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        instanceName: instance.instanceName,
+        webhookStats: {
+          enabled: instance.webhook.enabled,
+          totalReceived: instance.webhook.totalReceived,
+          lastReceived: instance.webhook.lastReceived,
+          failedWebhooks: instance.webhook.failedWebhooks,
+          events: instance.webhook.events
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao obter estatísticas de webhook:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao obter estatísticas de webhook',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 }; 

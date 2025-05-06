@@ -10,8 +10,10 @@ const campaignRoutes = require('./routes/campaignRoutes');
 const instanceRoutes = require('./routes/instanceRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const alertRoutes = require('./routes/alertRoutes');
+const { errorHandler } = require('./middlewares/errorMiddleware');
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -29,29 +31,23 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/zapstorm')
   .catch(err => console.error('Erro ao conectar ao MongoDB:', err));
 
 // Rotas da API
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/contacts', contactRoutes);
-app.use('/api/templates', templateRoutes);
 app.use('/api/campaigns', campaignRoutes);
+app.use('/api/templates', templateRoutes);
 app.use('/api/instances', instanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/webhook', webhookRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/webhook', webhookRoutes);
 
 // Rota de teste
 app.get('/', (req, res) => {
   res.send('API ZapStorm está rodando!');
 });
 
-// Middleware de erro
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    success: false,
-    message: 'Erro interno no servidor',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
+// Middleware de tratamento de erros
+app.use(errorHandler);
 
 // Exportar app
 module.exports = app; 

@@ -1,463 +1,339 @@
+/**
+ * Serviço unificado de fila utilizando apenas RabbitMQ
+ * Este serviço substitui o uso do Bull/Redis e centraliza todas as operações de fila
+ */
+
 const amqp = require('amqplib');
 const logger = require('../utils/logger');
 
-class QueueService {
-  constructor() {
-    this.connection = null;
-    this.channel = null;
-    this.url = process.env.RABBITMQ_URI || 'amqp://localhost:5672';
-    this.queues = {
-      MESSAGES: 'zapstorm-messages',
-      RETRY: 'zapstorm-retry',
-      FAILED: 'zapstorm-failed',
-      EVENTS: 'zapstorm-events',
-      DLQ: 'zapstorm-dlq'  // Nova fila para mensagens mortas
+// Configurações
+const RABBITMQ_URI = process.env.RABBITMQ_URI || 'amqp://localhost';
+const RETRY_INTERVAL = 5000; // ms
+
+// Nomes das filas
+const QUEUE_NAMES = {
+  MESSAGES: 'messages',
+  DELAYED_MESSAGES: 'delayed-messages',
+  FAILED_MESSAGES: 'failed-messages',
+  WEBHOOKS: 'webhooks'
+};
+
+// Estado da conexão
+let connection = null;
+let channel = null;
+let isConnecting = false;
+
+/**
+ * Conecta ao RabbitMQ e configura as filas
+ */
+const connect = async () => {
+  if (channel) return channel;
+  if (isConnecting) {
+    logger.info('Já existe uma conexão em andamento, aguardando...');
+    return waitForConnection();
+  }
+
+  isConnecting = true;
+  
+  try {
+    logger.info(`Conectando ao RabbitMQ: ${RABBITMQ_URI}`);
+    connection = await amqp.connect(RABBITMQ_URI);
+    
+    // Gerenciar reconexão em caso de falha
+    connection.on('error', (err) => {
+      logger.error(`Erro na conexão com RabbitMQ: ${err.message}`);
+      setTimeout(reconnect, RETRY_INTERVAL);
+    });
+    
+    connection.on('close', () => {
+      if (channel) {
+        logger.warn('Conexão RabbitMQ fechada, tentando reconectar...');
+        setTimeout(reconnect, RETRY_INTERVAL);
+      }
+    });
+    
+    // Criar canal
+    channel = await connection.createChannel();
+    
+    // Configurar filas com suas características
+    await channel.assertQueue(QUEUE_NAMES.MESSAGES, { 
+      durable: true 
+    });
+    
+    await channel.assertQueue(QUEUE_NAMES.DELAYED_MESSAGES, { 
+      durable: true,
+      arguments: {
+        'x-message-ttl': 60000, // TTL padrão de 1 minuto
+        'x-dead-letter-exchange': '',
+        'x-dead-letter-routing-key': QUEUE_NAMES.MESSAGES
+      }
+    });
+    
+    await channel.assertQueue(QUEUE_NAMES.FAILED_MESSAGES, { 
+      durable: true 
+    });
+    
+    await channel.assertQueue(QUEUE_NAMES.WEBHOOKS, { 
+      durable: true 
+    });
+    
+    // Prefetch para controle de concorrência
+    await channel.prefetch(process.env.RABBITMQ_PREFETCH || 5);
+    
+    logger.info('Conectado ao RabbitMQ e filas configuradas com sucesso');
+    isConnecting = false;
+    return channel;
+  } catch (error) {
+    logger.error(`Erro ao conectar ao RabbitMQ: ${error.message}`);
+    isConnecting = false;
+    setTimeout(reconnect, RETRY_INTERVAL);
+    throw error;
+  }
+};
+
+/**
+ * Tenta reconectar ao RabbitMQ
+ */
+const reconnect = async () => {
+  if (isConnecting) return;
+  
+  try {
+    // Limpar estado
+    if (channel) {
+      try {
+        await channel.close();
+      } catch (err) {
+        logger.error(`Erro ao fechar canal: ${err.message}`);
+      }
+      channel = null;
+    }
+    
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        logger.error(`Erro ao fechar conexão: ${err.message}`);
+      }
+      connection = null;
+    }
+    
+    // Reconectar
+    await connect();
+  } catch (error) {
+    logger.error(`Erro na reconexão com RabbitMQ: ${error.message}`);
+    setTimeout(reconnect, RETRY_INTERVAL);
+  }
+};
+
+/**
+ * Espera até que a conexão esteja estabelecida
+ */
+const waitForConnection = () => {
+  return new Promise((resolve) => {
+    const checkConnection = () => {
+      if (channel) {
+        resolve(channel);
+      } else {
+        setTimeout(checkConnection, 500);
+      }
     };
-    this.isReconnecting = false;
-    this.reconnectTimeout = null;
+    checkConnection();
+  });
+};
+
+/**
+ * Envia uma mensagem para a fila principal
+ * @param {Object} message Mensagem a ser enviada
+ * @returns {Promise<boolean>} Resultado da operação
+ */
+const enqueueMessage = async (message) => {
+  try {
+    if (!channel) await connect();
     
-    // Log da URL para depuração
-    logger.info(`QueueService inicializado com URL: ${this.url}`);
-  }
-
-  async setupQueues() {
-    // Configurar DLQ
-    await this.channel.assertQueue(this.queues.DLQ, {
-      durable: true
-    });
-
-    // Configurar filas com seus parâmetros e DLQ
-    await this.channel.assertQueue(this.queues.MESSAGES, {
-      durable: true,
-      messageTtl: 3600000,
-      deadLetterExchange: '',
-      deadLetterRoutingKey: this.queues.DLQ
-    });
-    
-    await this.channel.assertQueue(this.queues.RETRY, {
-      durable: true,
-      messageTtl: 3600000 * 24,
-      deadLetterExchange: '',
-      deadLetterRoutingKey: this.queues.DLQ
-    });
-    
-    await this.channel.assertQueue(this.queues.FAILED, {
-      durable: true,
-      messageTtl: 3600000 * 48,
-      deadLetterExchange: '',
-      deadLetterRoutingKey: this.queues.DLQ
-    });
-    
-    await this.channel.assertQueue(this.queues.EVENTS, {
-      durable: true,
-      deadLetterExchange: '',
-      deadLetterRoutingKey: this.queues.DLQ
-    });
-  }
-
-  async connect() {
-    if (this.isReconnecting) {
-      logger.warn('Tentativa de reconexão já em andamento, ignorando...');
-      return;
-    }
-
-    this.isReconnecting = true;
-    let attempts = 0;
-    const maxAttempts = 5;
-    const baseDelay = 1000;
-
-    try {
-      while (attempts < maxAttempts) {
-        try {
-          logger.info(`Tentativa ${attempts + 1}/${maxAttempts} de conexão ao RabbitMQ em: ${this.url}`);
-          
-          this.connection = await amqp.connect(this.url);
-          this.channel = await this.connection.createChannel();
-          
-          // Configurar filas
-          await this.setupQueues();
-          
-          // Configurar handlers para reconexão
-          this.connection.on('error', (err) => {
-            logger.error('Erro na conexão RabbitMQ:', err);
-            this.handleDisconnect();
-          });
-          
-          this.connection.on('close', () => {
-            logger.warn('Conexão RabbitMQ fechada');
-            this.handleDisconnect();
-          });
-          
-          logger.info('Conectado ao RabbitMQ e filas configuradas');
-          this.isReconnecting = false;
-          return true;
-        } catch (error) {
-          attempts++;
-          if (attempts >= maxAttempts) throw error;
-          
-          const delay = baseDelay * Math.pow(2, attempts);
-          logger.info(`Aguardando ${delay}ms antes da próxima tentativa...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-    } catch (error) {
-      logger.error('Falha em todas as tentativas de conexão:', error);
-      this.isReconnecting = false;
-      throw error;
-    }
-  }
-
-  handleDisconnect() {
-    this.connection = null;
-    this.channel = null;
-    
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-    }
-    
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect().catch(err => {
-        logger.error('Falha na reconexão automática:', err);
-      });
-    }, 5000);
-  }
-
-  async enqueueMessage(message) {
-    try {
-      if (!this.channel) {
-        try {
-          logger.info(`Tentando conectar ao RabbitMQ para enviar mensagem ${message._id}`);
-          console.log(`Tentando conectar ao RabbitMQ para enviar mensagem ${message._id}`);
-          await this.connect();
-          if (!this.channel) {
-            logger.error(`Não foi possível estabelecer canal com RabbitMQ após conexão`);
-            console.error(`Não foi possível estabelecer canal com RabbitMQ após conexão`);
-            return false;
-          }
-        } catch (connError) {
-          logger.error(`Erro ao conectar ao RabbitMQ para mensagem ${message._id}:`, connError);
-          console.error(`Erro ao conectar ao RabbitMQ:`, connError.message);
-          return false;
-        }
-      }
-      
-      // Tentativa de envio com até 3 retries
-      let attempts = 0;
-      while (attempts < 3) {
-        try {
-          const result = this.channel.sendToQueue(
-            this.queues.MESSAGES,
-            Buffer.from(JSON.stringify(message)),
-            {
-              persistent: true,
-              contentType: 'application/json'
-            }
-          );
-          
-          logger.info(`Mensagem ${message._id} enfileirada com sucesso`);
-          console.log(`Mensagem ${message._id} enfileirada com sucesso`);
-          return result;
-        } catch (sendError) {
-          attempts++;
-          logger.error(`Tentativa ${attempts}/3 falhou ao enviar mensagem ${message._id}:`, sendError);
-          console.error(`Tentativa ${attempts}/3 falhou:`, sendError.message);
-          
-          if (attempts < 3) {
-            // Esperar um pouco antes de tentar novamente
-            await new Promise(resolve => setTimeout(resolve, 500 * attempts));
-            
-            // Tentar recriar o canal se necessário
-            if (!this.channel || !this.connection) {
-              try {
-                await this.connect();
-              } catch (reconnError) {
-                logger.error(`Falha ao reconectar na tentativa ${attempts}:`, reconnError);
-              }
-            }
-          }
-        }
-      }
-      
-      logger.error(`Todas as tentativas de envio falharam para mensagem ${message._id}`);
-      return false;
-    } catch (error) {
-      logger.error(`Erro não tratado ao enfileirar mensagem ${message._id}:`, error);
-      console.error(`Erro não tratado:`, error.message);
-      
-      // Tentar reconectar em caso de erro
-      this.channel = null;
-      this.connection = null;
-      
-      return false;
-    }
-  }
-
-  async enqueueRetry(message, delay = 300000) { // 5 minutos de delay por padrão
-    if (!this.channel) {
-      await this.connect();
-    }
-    
-    return this.channel.sendToQueue(
-      this.queues.RETRY,
+    await channel.sendToQueue(
+      QUEUE_NAMES.MESSAGES,
       Buffer.from(JSON.stringify(message)),
-      {
-        persistent: true,
-        contentType: 'application/json',
-        expiration: delay.toString() // Atraso em ms
-      }
+      { persistent: true }
     );
+    
+    return true;
+  } catch (error) {
+    logger.error(`Erro ao enfileirar mensagem: ${error.message}`);
+    return false;
   }
+};
 
-  async enqueueFailed(message) {
-    if (!this.channel) {
-      await this.connect();
-    }
+/**
+ * Envia uma mensagem para a fila de atraso (delayed)
+ * Esta mensagem será movida para a fila principal após o tempo especificado
+ * @param {Object} message Mensagem a ser enviada
+ * @param {number} delayMs Atraso em milissegundos
+ * @returns {Promise<boolean>} Resultado da operação
+ */
+const enqueueDeferredMessage = async (message, delayMs = 60000) => {
+  try {
+    if (!channel) await connect();
     
-    return this.channel.sendToQueue(
-      this.queues.FAILED,
-      Buffer.from(JSON.stringify(message)),
-      {
-        persistent: true,
-        contentType: 'application/json'
-      }
-    );
-  }
-
-  async publishEvent(event) {
-    if (!this.channel) {
-      await this.connect();
-    }
+    // Se o atraso for muito longo, usar uma fila específica com TTL
+    const queueName = QUEUE_NAMES.DELAYED_MESSAGES;
     
-    return this.channel.sendToQueue(
-      this.queues.EVENTS,
-      Buffer.from(JSON.stringify(event)),
-      {
-        persistent: true,
-        contentType: 'application/json'
-      }
-    );
-  }
-
-  async consumeMessages(callback) {
-    if (!this.channel) {
-      await this.connect();
-    }
-    
-    return this.channel.consume(this.queues.MESSAGES, async (msg) => {
-      if (msg) {
-        try {
-          const message = JSON.parse(msg.content.toString());
-          await callback(message);
-          this.channel.ack(msg);
-        } catch (error) {
-          logger.error('Erro ao processar mensagem:', error);
-          this.channel.nack(msg, false, false);
-        }
-      }
-    });
-  }
-
-  async consumeRetry(callback) {
-    if (!this.channel) {
-      await this.connect();
-    }
-    
-    return this.channel.consume(this.queues.RETRY, async (msg) => {
-      if (msg) {
-        try {
-          const message = JSON.parse(msg.content.toString());
-          await callback(message);
-          this.channel.ack(msg);
-        } catch (error) {
-          logger.error('Erro ao processar mensagem de retry:', error);
-          this.channel.nack(msg, false, false);
-        }
-      }
-    });
-  }
-
-  async consumeEvents(callback) {
-    if (!this.channel) {
-      await this.connect();
-    }
-    
-    return this.channel.consume(this.queues.EVENTS, async (msg) => {
-      if (msg) {
-        try {
-          const event = JSON.parse(msg.content.toString());
-          await callback(event);
-          this.channel.ack(msg);
-        } catch (error) {
-          logger.error('Erro ao processar evento:', error);
-          this.channel.nack(msg, false, false);
-        }
-      }
-    });
-  }
-
-  async close() {
-    if (this.channel) {
-      await this.channel.close();
-    }
-    
-    if (this.connection) {
-      await this.connection.close();
-    }
-    
-    logger.info('Desconectado do RabbitMQ');
-  }
-
-  /**
-   * Envia mensagens em lote para a fila
-   * @param {Array} messages Lista de mensagens para enfileirar
-   * @param {Object} options Opções para envio em lote
-   */
-  async enqueueMessageBatch(messages, options = {}) {
-    const { batchSize = 50, delay = 5000 } = options;
-    
-    logger.info(`[queueService] Iniciando enfileiramento em lote: ${messages.length} mensagens, batchSize=${batchSize}, delay=${delay}ms`);
-    
-    try {
-      // Verificar conexão
-      if (!this.channel) {
-        logger.error('[queueService] Canal RabbitMQ não disponível para enfileiramento em lote!');
-        throw new Error('Canal RabbitMQ não disponível');
-      }
-
-      logger.info(`[queueService] Canal RabbitMQ disponível, verificando fila: ${this.queues.MESSAGES}`);
+    // Criar fila com TTL específico se necessário
+    if (delayMs !== 60000) {
+      const specificQueueName = `${QUEUE_NAMES.DELAYED_MESSAGES}-${delayMs}`;
       
-      // Garantir que a fila existe
-      await this.channel.assertQueue(this.queues.MESSAGES, {
-        durable: true
+      await channel.assertQueue(specificQueueName, {
+        durable: true,
+        arguments: {
+          'x-message-ttl': delayMs,
+          'x-dead-letter-exchange': '',
+          'x-dead-letter-routing-key': QUEUE_NAMES.MESSAGES
+        }
       });
       
-      logger.info(`[queueService] Fila ${this.queues.MESSAGES} verificada com sucesso`);
-      
-      // Dividir mensagens em lotes
-      const batches = [];
-      for (let i = 0; i < messages.length; i += batchSize) {
-        batches.push(messages.slice(i, i + batchSize));
-      }
-      
-      logger.info(`[queueService] Mensagens divididas em ${batches.length} lotes`);
-      
-      // Publicar cada lote com atraso entre eles
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        logger.info(`[queueService] Processando lote ${i+1}/${batches.length} com ${batch.length} mensagens`);
-        
-        for (const message of batch) {
-          const messageId = message._id || message.id || 'unknown';
-          const payload = {
-            _id: messageId.toString(),
-            contactId: message.contactId.toString(),
-            campaignId: message.campaignId.toString(),
-            content: message.content,
-            mediaUrl: message.mediaUrl,
-            mediaType: message.mediaType,
-            instanceId: message.instanceId
-          };
-          
-          try {
-            const success = this.channel.sendToQueue(
-              this.queues.MESSAGES,
-              Buffer.from(JSON.stringify(payload)),
-              {
-                persistent: true,
-                messageId: messageId.toString()
-              }
-            );
-            
-            if (!success) {
-              logger.warn(`[queueService] Não foi possível enfileirar mensagem ${messageId} - buffer cheio?`);
-            } else {
-              logger.debug(`[queueService] Mensagem ${messageId} enfileirada com sucesso`);
-            }
-          } catch (publishError) {
-            logger.error(`[queueService] Erro ao publicar mensagem ${messageId}: ${publishError.message}`);
-            throw publishError;
-          }
-        }
-        
-        logger.info(`[queueService] Lote ${i+1} publicado com sucesso com ${batch.length} mensagens`);
-        
-        // Adicionar atraso entre lotes (exceto o último)
-        if (i < batches.length - 1 && delay > 0) {
-          logger.debug(`[queueService] Aguardando ${delay}ms antes do próximo lote...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-      
-      logger.info(`[queueService] Enfileiramento em lote concluído com sucesso. Total: ${messages.length} mensagens em ${batches.length} lotes`);
-      
-      return {
-        success: true,
-        total: messages.length,
-        batches: batches.length
+      await channel.sendToQueue(
+        specificQueueName,
+        Buffer.from(JSON.stringify(message)),
+        { persistent: true }
+      );
+    } else {
+      // Usar fila de atraso padrão
+      await channel.sendToQueue(
+        queueName,
+        Buffer.from(JSON.stringify(message)),
+        { persistent: true }
+      );
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Erro ao enfileirar mensagem com atraso: ${error.message}`);
+    return false;
+  }
+};
+
+/**
+ * Envia uma mensagem para a fila de falhas
+ * @param {Object} message Mensagem a ser enviada
+ * @returns {Promise<boolean>} Resultado da operação
+ */
+const enqueueFailed = async (message) => {
+  try {
+    if (!channel) await connect();
+    
+    await channel.sendToQueue(
+      QUEUE_NAMES.FAILED_MESSAGES,
+      Buffer.from(JSON.stringify(message)),
+      { persistent: true }
+    );
+    
+    return true;
+  } catch (error) {
+    logger.error(`Erro ao enfileirar mensagem falha: ${error.message}`);
+    return false;
+  }
+};
+
+/**
+ * Enfileira mensagem com retry agendado
+ * @param {Object} message Mensagem a ser enviada
+ * @param {number} delayMs Atraso em milissegundos
+ * @returns {Promise<boolean>} Resultado da operação
+ */
+const enqueueRetry = async (message, delayMs = 30000) => {
+  return enqueueDeferredMessage(message, delayMs);
+};
+
+/**
+ * Enfileira um webhook para processamento assíncrono
+ * @param {Object} webhookData Dados do webhook
+ * @returns {Promise<boolean>} Resultado da operação
+ */
+const enqueueWebhook = async (webhookData) => {
+  try {
+    if (!channel) await connect();
+    
+    await channel.sendToQueue(
+      QUEUE_NAMES.WEBHOOKS,
+      Buffer.from(JSON.stringify(webhookData)),
+      { persistent: true }
+    );
+    
+    return true;
+  } catch (error) {
+    logger.error(`Erro ao enfileirar webhook: ${error.message}`);
+    return false;
+  }
+};
+
+/**
+ * Obtém estatísticas das filas
+ * @returns {Promise<Object>} Estatísticas das filas
+ */
+const getQueueStats = async () => {
+  try {
+    if (!channel) await connect();
+    
+    const stats = {};
+    
+    for (const queueName of Object.values(QUEUE_NAMES)) {
+      const queueInfo = await channel.assertQueue(queueName, { durable: true });
+      stats[queueName] = {
+        messages: queueInfo.messageCount,
+        consumers: queueInfo.consumerCount
       };
-    } catch (error) {
-      logger.error(`[queueService] Erro ao enfileirar mensagens em lote: ${error.message}`);
-      logger.error(`[queueService] Stack trace: ${error.stack}`);
-      
-      // Tentar reconectar se for um erro de conexão
-      if (error.message.includes('connection') || error.message.includes('channel')) {
-        logger.info('[queueService] Tentando reconectar ao RabbitMQ...');
-        await this.connect();
-      }
-      
-      throw error;
-    }
-  }
-
-  /**
-   * Configura uma fila com limites de processamento
-   * @param {String} queueName Nome da fila
-   * @param {Object} options Opções da fila
-   */
-  async setupThrottledQueue(queueName, options = {}) {
-    if (!this.channel) {
-      await this.connect();
     }
     
-    await this.channel.assertQueue(queueName, {
-      durable: true,
-      messageTtl: options.messageTtl || 3600000,
-      maxPriority: options.maxPriority || 10
-    });
-    
-    // Configurar QoS para limitar número de mensagens por consumidor
-    const prefetchCount = options.prefetchCount || 10;
-    await this.channel.prefetch(prefetchCount);
-    
-    logger.info(`Fila ${queueName} configurada com limite de ${prefetchCount} mensagens por vez`);
-    
+    // Formatar estatísticas para formato compatível com Bull
     return {
-      queueName,
-      prefetchCount
+      waiting: stats[QUEUE_NAMES.MESSAGES].messages,
+      active: stats[QUEUE_NAMES.MESSAGES].consumers,
+      delayed: stats[QUEUE_NAMES.DELAYED_MESSAGES].messages,
+      failed: stats[QUEUE_NAMES.FAILED_MESSAGES].messages,
+      webhooks: stats[QUEUE_NAMES.WEBHOOKS].messages
+    };
+  } catch (error) {
+    logger.error(`Erro ao obter estatísticas das filas: ${error.message}`);
+    return {
+      waiting: 0,
+      active: 0,
+      delayed: 0,
+      failed: 0,
+      webhooks: 0,
+      error: error.message
     };
   }
+};
 
-  /**
-   * Obtém estatísticas de uma fila
-   * @param {String} queueName Nome da fila
-   */
-  async getQueueStats(queueName) {
-    if (!this.channel) {
-      await this.connect();
+/**
+ * Fecha a conexão com RabbitMQ
+ */
+const close = async () => {
+  try {
+    if (channel) {
+      await channel.close();
+      channel = null;
     }
     
-    try {
-      const stats = await this.channel.assertQueue(queueName);
-      return {
-        name: queueName,
-        messageCount: stats.messageCount,
-        consumerCount: stats.consumerCount
-      };
-    } catch (error) {
-      logger.error(`Erro ao obter estatísticas da fila ${queueName}:`, error);
-      throw error;
+    if (connection) {
+      await connection.close();
+      connection = null;
     }
+    
+    logger.info('Conexão com RabbitMQ fechada com sucesso');
+  } catch (error) {
+    logger.error(`Erro ao fechar conexão com RabbitMQ: ${error.message}`);
   }
-}
+};
 
-module.exports = new QueueService(); 
+module.exports = {
+  connect,
+  enqueueMessage,
+  enqueueDeferredMessage,
+  enqueueFailed,
+  enqueueRetry,
+  enqueueWebhook,
+  getQueueStats,
+  close,
+  queues: QUEUE_NAMES,
+  channel: () => channel
+}; 
