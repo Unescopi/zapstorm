@@ -53,6 +53,8 @@ const authMiddleware = async (req, res, next) => {
 
     next();
   } catch (error) {
+    logger.error(`Erro de autenticação: ${error.message}`);
+    
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,
@@ -75,6 +77,9 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
+// Middleware protect - Alias para authMiddleware (para compatibilidade com código existente)
+const protect = authMiddleware;
+
 // Middleware para verificar permissões de admin
 const adminMiddleware = (req, res, next) => {
   if (req.user && req.user.role === 'admin') {
@@ -89,5 +94,6 @@ const adminMiddleware = (req, res, next) => {
 
 module.exports = {
   authMiddleware,
-  adminMiddleware
+  adminMiddleware,
+  protect
 }; 
