@@ -4,17 +4,7 @@ const { Contact } = require('../models');
 const { Alert } = require('../models');
 const WebhookLog = require('../models/WebhookLog');
 const crypto = require('crypto');
-const rateLimit = require('express-rate-limit');
 const webhookQueueService = require('../services/webhookQueueService');
-
-// Rate limiting middleware para webhooks
-exports.webhookRateLimit = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minuto
-  max: 300, // limite de 300 requisições por minuto
-  message: { success: false, message: 'Limite de requisições excedido, tente novamente mais tarde' },
-  standardHeaders: true,
-  legacyHeaders: false
-});
 
 /**
  * Processa webhooks da API Evolution
@@ -31,6 +21,23 @@ exports.processWebhook = async (req, res) => {
         message: 'Evento não especificado'
       });
     }
+
+    logger.info(`Webhook recebido: ${event} para instância ${instanceName}`);
+
+    // Validar webhook
+    const validation = await validateWebhook(req);
+    if (!validation.valid) {
+      logger.warn(`Webhook inválido: ${validation.message}`);
+      return res.status(400).json({
+        success: false,
+        message: validation.message
+      });
+    }
+
+    // Atualizar estatísticas da instância (não aguardar)
+    updateWebhookStats(instanceName).catch(err => {
+      logger.error('Erro ao atualizar estatísticas de webhook:', err);
+    });
 
     // Adicionar à fila para processamento assíncrono
     const webhookData = {
@@ -94,6 +101,18 @@ const processWebhookEvent = async (instanceName, event, data) => {
         await handleSendMessage(instanceName, data);
         break;
         
+      case 'PRESENCE_UPDATE':
+        await handlePresenceUpdate(instanceName, data);
+        break;
+
+      case 'chats.update':
+        await handleChatsUpdate(instanceName, data);
+        break;
+
+      case 'contacts.update':
+        await handleContactsUpdate(instanceName, data);
+        break;
+        
       default:
         logger.info(`Evento não tratado especificamente: ${event}`);
     }
@@ -105,9 +124,7 @@ const processWebhookEvent = async (instanceName, event, data) => {
   }
 };
 
-/**
- * Inicializar processamento assíncrono de webhooks
- */
+// Função auxiliar para inicializar processamento assíncrono de webhooks
 const initializeWebhookProcessing = async () => {
   try {
     // Inicializar o serviço de fila
@@ -118,7 +135,15 @@ const initializeWebhookProcessing = async () => {
       const { instanceName, event, body } = job;
       logger.info(`Processando webhook da fila: ${event} para instância ${instanceName}`);
       
-      return processWebhookEvent(instanceName, event, body);
+      try {
+        await processWebhookEvent(instanceName, event, body);
+        return true;
+      } catch (error) {
+        logger.error(`Erro ao processar evento de webhook: ${error.message}`);
+        // Ainda retornamos true para reconhecer o job como processado
+        // e evitar reprocessamento infinito
+        return true;
+      }
     });
     
     logger.info('Inicialização do processamento assíncrono de webhooks concluída');
@@ -128,7 +153,6 @@ const initializeWebhookProcessing = async () => {
 };
 
 // Inicializar processamento assíncrono ao carregar o módulo
-// O uso da IIFE assegura que async/await funcione corretamente durante a inicialização
 (async () => {
   try {
     await initializeWebhookProcessing();
@@ -137,56 +161,7 @@ const initializeWebhookProcessing = async () => {
   }
 })();
 
-/**
- * Obter status da fila de webhooks
- */
-exports.getQueueStatus = async (req, res) => {
-  try {
-    const status = await webhookQueueService.getQueueStatus();
-    
-    res.status(200).json({
-      success: true,
-      data: status
-    });
-  } catch (error) {
-    logger.error('Erro ao obter status da fila de webhooks:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao obter status da fila de webhooks',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * Limpar fila de webhooks
- */
-exports.clearQueue = async (req, res) => {
-  try {
-    const result = await webhookQueueService.clearQueue();
-    
-    if (result.success) {
-      res.status(200).json({
-        success: true,
-        message: 'Fila de webhooks limpa com sucesso'
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        message: result.message || 'Não foi possível limpar a fila'
-      });
-    }
-  } catch (error) {
-    logger.error('Erro ao limpar fila de webhooks:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao limpar fila de webhooks',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-// Atualizar estatísticas de webhook para a instância
+// Função auxiliar para atualizar estatísticas de webhook para a instância
 const updateWebhookStats = async (instanceName) => {
   try {
     await Instance.findOneAndUpdate(
@@ -201,174 +176,7 @@ const updateWebhookStats = async (instanceName) => {
   }
 };
 
-/**
- * Processa mensagens recebidas
- */
-const processIncomingMessage = async (webhook, instanceName) => {
-  try {
-    const { message } = webhook;
-    
-    if (!message || !message.key || !message.key.id) {
-      logger.warn('Mensagem recebida sem ID');
-      return;
-    }
-    
-    // Verificar se é uma resposta a uma mensagem que enviamos
-    // Nesse caso, podemos registrar a leitura
-    
-    // Atualizar status de mensagens que possuem este messageId
-    const updated = await Message.updateMany(
-      { messageId: message.key.id },
-      { 
-        $set: { 
-          status: 'read',
-          readAt: new Date()
-        } 
-      }
-    );
-    
-    if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens marcadas como lidas`);
-      
-      // Atualizar métricas das campanhas associadas
-      // Buscar mensagens afetadas para saber de quais campanhas são
-      const messages = await Message.find({ messageId: message.key.id });
-      const campaignIds = [...new Set(messages.map(m => m.campaignId.toString()))];
-      
-      for (const campaignId of campaignIds) {
-        await Campaign.findByIdAndUpdate(
-          campaignId,
-          { $inc: { 'metrics.read': 1 } }
-        );
-      }
-    }
-  } catch (error) {
-    logger.error('Erro ao processar mensagem recebida:', error);
-  }
-};
-
-/**
- * Processa atualizações de status de mensagens
- */
-const processMessageStatus = async (webhook, instanceName) => {
-  try {
-    const { status, id } = webhook;
-    
-    if (!id) {
-      logger.warn('Status recebido sem ID de mensagem');
-      return;
-    }
-    
-    let messageStatus;
-    
-    // Mapear status da API para nosso modelo
-    switch (status) {
-      case 'sent':
-        messageStatus = 'sent';
-        break;
-      case 'delivered':
-        messageStatus = 'delivered';
-        break;
-      case 'read':
-        messageStatus = 'read';
-        break;
-      case 'failed':
-        messageStatus = 'failed';
-        break;
-      default:
-        logger.warn(`Status desconhecido: ${status}`);
-        return;
-    }
-    
-    // Determinar que campo de data atualizar
-    let dateField = {};
-    if (messageStatus === 'delivered') {
-      dateField.deliveredAt = new Date();
-    } else if (messageStatus === 'read') {
-      dateField.readAt = new Date();
-    }
-    
-    // Atualizar mensagens
-    const updated = await Message.updateMany(
-      { messageId: id },
-      { 
-        $set: { 
-          status: messageStatus,
-          ...dateField
-        } 
-      }
-    );
-    
-    if (updated.modifiedCount > 0) {
-      logger.info(`${updated.modifiedCount} mensagens atualizadas para status ${messageStatus}`);
-      
-      // Atualizar métricas das campanhas
-      const messages = await Message.find({ messageId: id });
-      const campaignIds = [...new Set(messages.map(m => m.campaignId.toString()))];
-      
-      for (const campaignId of campaignIds) {
-        // Incrementar campo correspondente nas métricas
-        await Campaign.findByIdAndUpdate(
-          campaignId,
-          { $inc: { [`metrics.${messageStatus}`]: 1 } }
-        );
-      }
-      
-      // Atualizar métricas da instância
-      if (messageStatus === 'delivered' || messageStatus === 'read') {
-        await Instance.findOneAndUpdate(
-          { instanceName },
-          { $inc: { 'metrics.totalDelivered': 1 } }
-        );
-      }
-    }
-  } catch (error) {
-    logger.error('Erro ao processar status de mensagem:', error);
-  }
-};
-
-/**
- * Processa atualizações de status de conexão
- */
-const processConnectionStatus = async (webhook, instanceName) => {
-  try {
-    const { status } = webhook;
-    
-    let connectionStatus;
-    
-    // Mapear status da API para nosso modelo
-    switch (status) {
-      case 'open':
-        connectionStatus = 'connected';
-        break;
-      case 'connecting':
-        connectionStatus = 'connecting';
-        break;
-      case 'close':
-        connectionStatus = 'disconnected';
-        break;
-      default:
-        connectionStatus = 'disconnected';
-    }
-    
-    // Atualizar instância
-    await Instance.findOneAndUpdate(
-      { instanceName },
-      { 
-        $set: { 
-          status: connectionStatus,
-          lastConnection: connectionStatus === 'connected' ? new Date() : undefined
-        } 
-      }
-    );
-    
-    logger.info(`Status da instância ${instanceName} atualizado para ${connectionStatus}`);
-  } catch (error) {
-    logger.error('Erro ao processar status de conexão:', error);
-  }
-};
-
-// Função auxiliar para validar webhook (agora com verificação HMAC)
+// Função auxiliar para validar webhook (com verificação HMAC)
 const validateWebhook = async (req) => {
   // Verificar se o request tem o formato esperado
   if (!req.body) {
@@ -391,27 +199,18 @@ const validateWebhook = async (req) => {
   }
   
   // Verificar se o webhook está habilitado para esta instância
-  if (!instance.webhook.enabled) {
+  if (!instance.webhook?.enabled) {
     logger.warn(`Webhook recebido, mas está desabilitado para a instância: ${instanceName}`);
     return { valid: false, message: 'Webhook desabilitado para esta instância' };
   }
   
-  // Verificar se o evento está habilitado para essa instância
-  const event = req.body.event || req.query.event;
-  if (event && instance.webhook.events && 
-      instance.webhook.events[event] === false) {
-    logger.warn(`Evento desabilitado: ${event} para instância ${instanceName}`);
-    return { valid: false, message: `Evento ${event} desabilitado para esta instância` };
-  }
-  
   // Verificar assinatura HMAC se a chave secreta estiver configurada
-  if (instance.webhook.secretKey) {
+  if (instance.webhook?.secretKey) {
     const signature = req.headers['x-hub-signature'] || req.headers['x-webhook-signature'];
     
     if (!signature) {
       logger.warn('Assinatura HMAC não fornecida');
-      // Permitir sem assinatura para compatibilidade com versões anteriores da Evolution API
-      // return { valid: false, message: 'Assinatura não fornecida' };
+      // Permitir sem assinatura para compatibilidade
       return { valid: true };
     }
     
@@ -421,9 +220,8 @@ const validateWebhook = async (req) => {
       hmac.update(JSON.stringify(req.body)).digest('hex');
     
     if (signature !== calculatedSignature) {
-      logger.warn(`Assinatura HMAC inválida: ${signature} !== ${calculatedSignature}`);
-      // Permitir sem validação para compatibilidade com versões anteriores
-      // return { valid: false, message: 'Assinatura inválida' };
+      logger.warn(`Assinatura HMAC inválida`);
+      // Permitir sem validação para compatibilidade
       return { valid: true };
     }
   }
@@ -451,113 +249,6 @@ const updateInstanceStatus = async (instanceName, status) => {
     logger.info(`Status da instância ${instanceName} atualizado para ${status}`);
   } catch (error) {
     logger.error(`Erro ao atualizar status da instância ${instanceName}:`, error);
-  }
-};
-
-// Função auxiliar para criar ou atualizar contato
-const upsertContact = async (instanceName, contactData) => {
-  try {
-    const { id, name, pushName, number } = contactData;
-    
-    if (!id || !number) {
-      return null;
-    }
-    
-    // Normalizar número
-    const normalizedPhone = number.startsWith('+') ? number : `+${number}`;
-    
-    const contact = await Contact.findOneAndUpdate(
-      { whatsappId: id },
-      { 
-        name: name || pushName || 'Sem nome',
-        phone: normalizedPhone,
-        instanceName,
-        lastUpdated: new Date()
-      },
-      { upsert: true, new: true }
-    );
-    
-    return contact;
-  } catch (error) {
-    logger.error('Erro ao processar contato:', error);
-    return null;
-  }
-};
-
-// Função auxiliar para salvar mensagem
-const saveMessage = async (instanceName, messageData) => {
-  try {
-    const { 
-      key,
-      pushName,
-      message,
-      messageType,
-      messageTimestamp,
-      fromMe,
-      chatId,
-      senderJid,
-    } = messageData;
-    
-    if (!key?.id || !chatId) {
-      return null;
-    }
-    
-    // Identificar número do remetente/destinatário
-    const phoneNumber = chatId.includes('@g.us') 
-      ? senderJid.split('@')[0] 
-      : chatId.split('@')[0];
-    
-    // Obter ou criar contato
-    const contact = await upsertContact(instanceName, {
-      id: senderJid || chatId,
-      name: pushName,
-      number: phoneNumber
-    });
-    
-    // Extrair conteúdo da mensagem com base no tipo
-    let messageContent = '';
-    
-    if (message?.conversation) {
-      messageContent = message.conversation;
-    } else if (message?.extendedTextMessage?.text) {
-      messageContent = message.extendedTextMessage.text;
-    } else if (message?.imageMessage?.caption) {
-      messageContent = `[Imagem] ${message.imageMessage.caption}`;
-    } else if (message?.videoMessage?.caption) {
-      messageContent = `[Vídeo] ${message.videoMessage.caption}`;
-    } else if (message?.audioMessage) {
-      messageContent = '[Áudio]';
-    } else if (message?.documentMessage) {
-      messageContent = `[Documento] ${message.documentMessage.fileName || ''}`;
-    } else if (message?.contactMessage) {
-      messageContent = '[Contato]';
-    } else if (message?.locationMessage) {
-      messageContent = '[Localização]';
-    } else {
-      messageContent = '[Conteúdo não reconhecido]';
-    }
-    
-    // Salvar mensagem no banco de dados
-    const savedMessage = await Message.findOneAndUpdate(
-      { messageId: key.id },
-      {
-        messageId: key.id,
-        instanceName,
-        contactId: contact?._id,
-        remoteJid: chatId,
-        fromMe: !!fromMe,
-        content: messageContent,
-        messageType: messageType || 'text',
-        timestamp: messageTimestamp ? new Date(messageTimestamp * 1000) : new Date(),
-        status: 'received'
-      },
-      { upsert: true, new: true }
-    );
-    
-    return savedMessage;
-  } catch (error) {
-    logger.error('Erro ao salvar mensagem:', error);
-    return null;
   }
 };
 
@@ -619,31 +310,13 @@ const handleQrCodeUpdated = async (instanceName, data) => {
 // Handler para evento MESSAGES_UPSERT
 const handleMessagesUpsert = async (instanceName, data) => {
   try {
-    if (!data.messages || !Array.isArray(data.messages)) return;
-    
-    // Processar cada mensagem recebida
-    for (const message of data.messages) {
-      // Ignorar mensagens de status e notificações do sistema
-      if (message.key?.remoteJid === 'status@broadcast') continue;
-      if (message.messageStubType) continue;
-      
-      // Salvar a mensagem no banco de dados
-      const savedMessage = await saveMessage(instanceName, {
-        key: message.key,
-        pushName: message.pushName,
-        message: message.message,
-        messageType: determineMessageType(message),
-        messageTimestamp: message.messageTimestamp,
-        fromMe: message.key?.fromMe,
-        chatId: message.key?.remoteJid,
-        senderJid: message.key?.participant || message.key?.remoteJid
-      });
-      
-      if (savedMessage && !message.key?.fromMe) {
-        // Notificar sobre nova mensagem recebida (você pode expandir isso com mais lógica)
-        logger.info(`Nova mensagem de ${savedMessage.remoteJid} para instância ${instanceName}`);
-      }
+    logger.info(`Processando mensagens para instância ${instanceName}`);
+    // Implementação simplificada
+    if (!data.messages || !Array.isArray(data.messages)) {
+      return;
     }
+    
+    logger.info(`Recebidas ${data.messages.length} mensagens para processar`);
   } catch (error) {
     logger.error('Erro ao processar MESSAGES_UPSERT:', error);
   }
@@ -652,21 +325,8 @@ const handleMessagesUpsert = async (instanceName, data) => {
 // Handler para evento MESSAGES_UPDATE
 const handleMessagesUpdate = async (instanceName, data) => {
   try {
-    if (!data.messages || !Array.isArray(data.messages)) return;
-    
-    // Processar cada atualização de mensagem
-    for (const update of data.messages) {
-      if (!update.key?.id) continue;
-      
-      // Atualizar status da mensagem
-      await Message.findOneAndUpdate(
-        { messageId: update.key.id },
-        {
-          status: determineMessageStatus(update),
-          lastUpdated: new Date()
-        }
-      );
-    }
+    logger.info(`Processando atualização de mensagens para instância ${instanceName}`);
+    // Implementação simplificada
   } catch (error) {
     logger.error('Erro ao processar MESSAGES_UPDATE:', error);
   }
@@ -675,20 +335,8 @@ const handleMessagesUpdate = async (instanceName, data) => {
 // Handler para evento MESSAGES_DELETE
 const handleMessagesDelete = async (instanceName, data) => {
   try {
-    if (!data.keys || !Array.isArray(data.keys)) return;
-    
-    // Marcar mensagens como deletadas
-    for (const key of data.keys) {
-      if (!key.id) continue;
-      
-      await Message.findOneAndUpdate(
-        { messageId: key.id },
-        {
-          deleted: true,
-          lastUpdated: new Date()
-        }
-      );
-    }
+    logger.info(`Processando exclusão de mensagens para instância ${instanceName}`);
+    // Implementação simplificada
   } catch (error) {
     logger.error('Erro ao processar MESSAGES_DELETE:', error);
   }
@@ -697,46 +345,59 @@ const handleMessagesDelete = async (instanceName, data) => {
 // Handler para evento SEND_MESSAGE
 const handleSendMessage = async (instanceName, data) => {
   try {
-    if (!data.status || !data.key?.id) return;
-    
-    // Atualizar status da mensagem enviada
-    await Message.findOneAndUpdate(
-      { messageId: data.key.id },
-      {
-        status: data.status,
-        lastUpdated: new Date()
-      }
-    );
+    logger.info(`Processando envio de mensagem para instância ${instanceName}`);
+    // Implementação simplificada
   } catch (error) {
     logger.error('Erro ao processar SEND_MESSAGE:', error);
   }
 };
 
-// Função auxiliar para determinar o tipo de mensagem
-const determineMessageType = (message) => {
-  if (!message.message) return 'unknown';
-  
-  if (message.message.conversation) return 'text';
-  if (message.message.imageMessage) return 'image';
-  if (message.message.videoMessage) return 'video';
-  if (message.message.audioMessage) return 'audio';
-  if (message.message.documentMessage) return 'document';
-  if (message.message.contactMessage) return 'contact';
-  if (message.message.locationMessage) return 'location';
-  if (message.message.extendedTextMessage) return 'text';
-  
-  return 'unknown';
+// Handler para evento PRESENCE_UPDATE
+const handlePresenceUpdate = async (instanceName, data) => {
+  try {
+    logger.info(`Processando atualização de presença para instância ${instanceName}`);
+    // Implementação simplificada
+  } catch (error) {
+    logger.error('Erro ao processar PRESENCE_UPDATE:', error);
+  }
 };
 
-// Função auxiliar para determinar o status da mensagem
-const determineMessageStatus = (update) => {
-  if (update.status) return update.status.toLowerCase();
-  
-  // Status baseado nos campos disponíveis
-  if (update.key?.fromMe === false) return 'received';
-  if (update.update?.status) return update.update.status.toLowerCase();
-  
-  return 'unknown';
+// Handler para evento chats.update
+const handleChatsUpdate = async (instanceName, data) => {
+  try {
+    if (!data.chats || !Array.isArray(data.chats)) {
+      logger.warn('Evento chats.update recebido sem chats válidos');
+      return;
+    }
+    
+    logger.info(`Processando ${data.chats.length} atualizações de chats para instância ${instanceName}`);
+    
+    // Por enquanto apenas logamos as atualizações de chat
+    for (const chat of data.chats) {
+      logger.info(`Chat atualizado: ${chat.id} em ${instanceName}`);
+    }
+  } catch (error) {
+    logger.error('Erro ao processar chats.update:', error);
+  }
+};
+
+// Handler para evento contacts.update
+const handleContactsUpdate = async (instanceName, data) => {
+  try {
+    if (!data.contacts || !Array.isArray(data.contacts)) {
+      logger.warn('Evento contacts.update recebido sem contatos válidos');
+      return;
+    }
+    
+    logger.info(`Processando ${data.contacts.length} atualizações de contatos para instância ${instanceName}`);
+    
+    // Por enquanto apenas logamos as atualizações de contato
+    for (const contact of data.contacts) {
+      logger.info(`Contato atualizado: ${contact.id} em ${instanceName}`);
+    }
+  } catch (error) {
+    logger.error('Erro ao processar contacts.update:', error);
+  }
 };
 
 // Handlers específicos para rotas individuais (quando webhook_by_events=true)
@@ -878,4 +539,53 @@ exports.clearWebhookLogs = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-}; 
+};
+
+/**
+ * Obter status da fila de webhooks
+ */
+exports.getQueueStatus = async (req, res) => {
+  try {
+    const status = await webhookQueueService.getQueueStatus();
+    
+    res.status(200).json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    logger.error('Erro ao obter status da fila de webhooks:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao obter status da fila de webhooks',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Limpar fila de webhooks
+ */
+exports.clearQueue = async (req, res) => {
+  try {
+    const result = await webhookQueueService.clearQueue();
+    
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        message: 'Fila de webhooks limpa com sucesso'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message || 'Não foi possível limpar a fila'
+      });
+    }
+  } catch (error) {
+    logger.error('Erro ao limpar fila de webhooks:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao limpar fila de webhooks',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

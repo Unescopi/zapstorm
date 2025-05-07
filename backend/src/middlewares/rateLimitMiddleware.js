@@ -36,37 +36,25 @@ const authLimiter = rateLimit({
 });
 
 // Limiter para webhooks
-const webhookLimiter = rateLimit({
+const webhookRateLimit = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minuto
-  max: 100, // Limite de 100 webhooks por minuto
+  max: 500, // Limite de 500 webhooks por minuto
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req, res) => {
-    logger.warn(`Rate limit de webhook excedido para instância ${req.params.instanceName}`);
+    logger.warn(`Rate limit de webhook excedido`);
     
     // Ainda retornamos 200 para não fazer a API externa reenviar
     return res.status(200).json({
       success: false,
       message: 'Muitos webhooks recebidos. Alguns podem ser ignorados.'
     });
-  }
-});
-
-// Configurar rate limiting adequado para ambiente de produção
-exports.webhookRateLimit = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minuto
-  max: 500, // limite de 500 requisições por minuto (mais adequado para volume alto)
-  message: { success: false, message: 'Limite de requisições excedido, tente novamente mais tarde' },
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Usar RabbitMQ como armazenamento se disponível
-  // Nota: isso requeriria uma implementação personalizada
-  // ou usar algo como "rate-limit-redis" em produção
+  },
   skipFailedRequests: true // não contar requisições que resultam em erro
 });
 
 module.exports = {
   apiLimiter,
   authLimiter,
-  webhookLimiter
-}; 
+  webhookRateLimit
+};
