@@ -9,6 +9,7 @@ import Templates from '../pages/Templates';
 import Instances from '../pages/Instances';
 import Settings from '../pages/Settings';
 import Profile from '../pages/Profile';
+import WebhookLogs from '../pages/WebhookLogs';
 
 // Rota privada que verifica autenticação
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
@@ -133,6 +134,17 @@ export default function AppRoutes() {
           <PrivateRoute>
             <MainLayout>
               <Profile />
+            </MainLayout>
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/webhook-logs"
+        element={
+          <PrivateRoute>
+            <MainLayout>
+              <WebhookLogs />
             </MainLayout>
           </PrivateRoute>
         }

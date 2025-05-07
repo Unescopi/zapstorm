@@ -31,6 +31,7 @@ import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import LogoutIcon from '@mui/icons-material/Logout';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import WebhookIcon from '@mui/icons-material/Webhook';
 import { useAuth } from '../../contexts/AuthContext';
 import { useThemeContext } from '../../App';
 import LogoImage from '../../assets/images/logo.png';
@@ -83,6 +84,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
     { text: 'Campanhas', icon: <CampaignIcon />, path: '/campaigns' },
     { text: 'Templates', icon: <DescriptionIcon />, path: '/templates' },
     { text: 'Instâncias', icon: <PhoneAndroidIcon />, path: '/instances' },
+    { text: 'Logs de Webhook', icon: <WebhookIcon />, path: '/webhook-logs' },
     { text: 'Configurações', icon: <SettingsIcon />, path: '/settings' },
   ];
 

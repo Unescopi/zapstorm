@@ -175,6 +175,23 @@ const functions = {
     } catch (error) {
       logger.error('Erro ao processar SEND_MESSAGE:', error);
     }
+  },
+  
+  handlePresenceUpdate: async (instanceName, data) => {
+    try {
+      if (!data.id) {
+        logger.warn('Evento PRESENCE_UPDATE recebido sem ID');
+        return;
+      }
+      
+      logger.info(`Presença atualizada para ${data.id} em ${instanceName}`);
+      
+      // Por enquanto apenas logamos a atualização de presença
+      // Você pode expandir esta função para salvar o status no banco de dados se necessário
+      
+    } catch (error) {
+      logger.error('Erro ao processar PRESENCE_UPDATE:', error);
+    }
   }
 };
 
@@ -345,13 +362,22 @@ const processWebhookEvent = async (data) => {
   try {
     const { instanceName, event, body } = data;
     
+    // Validar dados necessários
+    if (!instanceName || !event) {
+      logger.error('Dados de webhook inválidos:', { instanceName, event });
+      return false;
+    }
+    
     // Iniciar o log do webhook
     const webhookLog = {
       instanceName,
       event,
       payload: body,
       status: 'success',
-      processingStart: Date.now()
+      processingStart: Date.now(),
+      processingTimeMs: 0,
+      responseStatus: 200,
+      responseMessage: 'Processado com sucesso'
     };
     
     try {
@@ -381,14 +407,16 @@ const processWebhookEvent = async (data) => {
           await functions.handleSendMessage(instanceName, body);
           break;
           
+        case 'PRESENCE_UPDATE':
+          await functions.handlePresenceUpdate(instanceName, body);
+          break;
+          
         default:
           logger.info(`Evento não tratado especificamente: ${event}`);
       }
       
       // Finalizar o log com sucesso
       webhookLog.processingTimeMs = Date.now() - webhookLog.processingStart;
-      webhookLog.responseStatus = 200;
-      webhookLog.responseMessage = 'Processado com sucesso';
       
       // Salvar log do webhook
       await WebhookLog.create(webhookLog);
