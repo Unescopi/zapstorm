@@ -21,93 +21,45 @@ exports.webhookRateLimit = rateLimit({
  * Esta função recebe eventos de mensagens e atualizações de status
  */
 exports.processWebhook = async (req, res) => {
-  const startTime = Date.now();
-  let logEntry = {
-    instanceName: req.body.instance || req.query.instance || 'unknown',
-    event: req.body.event || req.query.event || 'unknown',
-    payload: req.body,
-    status: 'success',
-    responseStatus: 200,
-    responseMessage: 'Processado com sucesso'
-  };
-  
   try {
-    // Validar webhook
-    const validation = await validateWebhook(req);
-    if (!validation.valid) {
-      logEntry.status = 'invalid';
-      logEntry.responseStatus = 400;
-      logEntry.responseMessage = validation.message;
-      
-      // Salvar log assíncrono (não aguardar)
-      WebhookLog.create({
-        ...logEntry,
-        processingTimeMs: Date.now() - startTime
-      }).catch(err => logger.error('Erro ao salvar log de webhook:', err));
-      
-      return res.status(400).json({ success: false, message: validation.message });
+    const instanceName = req.query.instance || 'unknown';
+    const event = req.body.event || req.query.event;
+
+    if (!event) {
+      return res.status(400).json({
+        success: false,
+        message: 'Evento não especificado'
+      });
     }
-    
-    const { body } = req;
-    const instanceName = body.instance || req.query.instance || 'unknown';
-    const event = body.event || req.query.event;
-    
-    logger.info(`Webhook recebido: ${event} para instância ${instanceName}`);
-    
-    // Atualizar estatísticas da instância (não aguardar)
-    updateWebhookStats(instanceName).catch(err => {
-      logger.error('Erro ao atualizar estatísticas de webhook:', err);
-    });
-    
-    // Adicionar à fila RabbitMQ para processamento assíncrono
-    const added = await webhookQueueService.addToQueue({
+
+    // Adicionar à fila para processamento assíncrono
+    const webhookData = {
       instanceName,
       event,
-      body,
-      receivedAt: new Date()
-    });
-    
-    if (added) {
-      logger.info(`Webhook adicionado à fila para processamento assíncrono: ${event} - ${instanceName}`);
+      body: req.body,
+      timestamp: new Date().toISOString()
+    };
+
+    const enqueued = await webhookQueueService.addToQueue(webhookData);
+
+    if (enqueued) {
+      return res.status(202).json({
+        success: true,
+        message: 'Webhook enfileirado para processamento'
+      });
     } else {
-      // Se falhou em adicionar à fila, processar síncronamente como fallback
-      logger.warn(`Falha ao adicionar webhook à fila, processando síncronamente: ${event} - ${instanceName}`);
-      await processWebhookEvent(instanceName, event, body);
+      logger.error('Falha ao enfileirar webhook:', webhookData);
+      return res.status(500).json({
+        success: false,
+        message: 'Erro ao processar webhook'
+      });
     }
-    
-    // Salvar log assíncrono (não aguardar)
-    WebhookLog.create({
-      ...logEntry,
-      processingTimeMs: Date.now() - startTime
-    }).catch(err => logger.error('Erro ao salvar log de webhook:', err));
-    
-    // Retornar sucesso imediatamente, o processamento continuará em background
-    return res.status(200).json({ success: true });
   } catch (error) {
     logger.error('Erro ao processar webhook:', error);
-    
-    // Atualizar log com erro
-    logEntry.status = 'failed';
-    logEntry.responseStatus = 500;
-    logEntry.responseMessage = `Erro: ${error.message}`;
-    
-    // Incrementar contador de falhas
-    try {
-      await Instance.findOneAndUpdate(
-        { instanceName: logEntry.instanceName },
-        { $inc: { 'webhook.failedWebhooks': 1 } }
-      );
-    } catch (err) {
-      logger.error('Erro ao atualizar contador de falhas:', err);
-    }
-    
-    // Salvar log assíncrono
-    WebhookLog.create({
-      ...logEntry,
-      processingTimeMs: Date.now() - startTime
-    }).catch(err => logger.error('Erro ao salvar log de webhook:', err));
-    
-    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+    return res.status(500).json({
+      success: false,
+      message: 'Erro interno no servidor'
+    });
   }
 };
 

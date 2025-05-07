@@ -52,6 +52,19 @@ const webhookLimiter = rateLimit({
   }
 });
 
+// Configurar rate limiting adequado para ambiente de produção
+exports.webhookRateLimit = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minuto
+  max: 500, // limite de 500 requisições por minuto (mais adequado para volume alto)
+  message: { success: false, message: 'Limite de requisições excedido, tente novamente mais tarde' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Usar RabbitMQ como armazenamento se disponível
+  // Nota: isso requeriria uma implementação personalizada
+  // ou usar algo como "rate-limit-redis" em produção
+  skipFailedRequests: true // não contar requisições que resultam em erro
+});
+
 module.exports = {
   apiLimiter,
   authLimiter,
