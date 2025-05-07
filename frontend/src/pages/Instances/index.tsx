@@ -29,6 +29,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import api from '../../services/api';
+import WebhookConfig from '../../components/WebhookConfig';
 
 // Definição do tipo para setTimeout/setInterval
 type TimeoutType = ReturnType<typeof setTimeout>;
@@ -393,6 +394,12 @@ const Instances: React.FC = () => {
                           <RefreshIcon fontSize="small" />
                         )}
                       </IconButton>
+                      
+                      <WebhookConfig
+                        instanceId={instance._id}
+                        instanceName={instance.instanceName}
+                        onSuccess={loadInstances}
+                      />
                       
                       <IconButton 
                         color="error" 
