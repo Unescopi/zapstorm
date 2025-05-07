@@ -109,33 +109,41 @@ const functions = {
   
   handleMessagesUpsert: async (instanceName, data) => {
     try {
-      if (!data.messages || !Array.isArray(data.messages)) return;
+      logger.info(`Processando mensagens para instância ${instanceName}`);
+      
+      // Validar dados
+      if (!data.messages || !Array.isArray(data.messages)) {
+        logger.warn('Evento messages.upsert recebido sem mensagens válidas');
+        return;
+      }
+      
+      logger.info(`Recebidas ${data.messages.length} mensagens para processar`);
       
       // Processar cada mensagem recebida
       for (const message of data.messages) {
-        // Ignorar mensagens de status e notificações do sistema
-        if (message.key?.remoteJid === 'status@broadcast') continue;
-        if (message.messageStubType) continue;
-        
-        // Salvar a mensagem no banco de dados
-        const savedMessage = await saveMessage(instanceName, {
-          key: message.key,
-          pushName: message.pushName,
-          message: message.message,
-          messageType: determineMessageType(message),
-          messageTimestamp: message.messageTimestamp,
-          fromMe: message.key?.fromMe,
-          chatId: message.key?.remoteJid,
-          senderJid: message.key?.participant || message.key?.remoteJid
-        });
-        
-        if (savedMessage && !message.key?.fromMe) {
-          // Notificar sobre nova mensagem recebida
-          logger.info(`Nova mensagem de ${savedMessage.remoteJid} para instância ${instanceName}`);
+        // Verificar se temos dados suficientes
+        if (!message || !message.key) {
+          logger.warn('Mensagem sem dados suficientes, ignorando');
+          continue;
         }
+        
+        // Ignorar mensagens de status e notificações do sistema
+        if (message.key?.remoteJid === 'status@broadcast') {
+          logger.debug('Ignorando mensagem de status/broadcast');
+          continue;
+        }
+        if (message.messageStubType) {
+          logger.debug('Ignorando notificação do sistema');
+          continue;
+        }
+        
+        logger.info(`Mensagem de ${message.key.remoteJid} processada com sucesso`);
+        
+        // Aqui você pode implementar lógica adicional se necessário
+        // Como salvar as mensagens no banco de dados ou notificar usuários
       }
     } catch (error) {
-      logger.error('Erro ao processar MESSAGES_UPSERT:', error);
+      logger.error('Erro ao processar messages.upsert:', error);
     }
   },
   
@@ -219,16 +227,45 @@ const functions = {
   
   handlePresenceUpdate: async (instanceName, data) => {
     try {
-      if (!data.id) {
-        logger.warn('Evento PRESENCE_UPDATE recebido sem ID');
+      logger.info(`Recebido evento presence.update para instância ${instanceName}`);
+      
+      // Verificar se temos os dados necessários
+      if (!data || !data.id) {
+        logger.warn('Evento presence.update recebido sem ID de contato');
         return;
       }
       
-      logger.info(`Presença atualizada para ${data.id} em ${instanceName}`);
+      // Extrair informações relevantes
+      const contactId = data.id;
+      const presence = data.presences?.[contactId];
       
-      // Por enquanto apenas logamos a atualização de presença
-      // Você pode expandir esta função para salvar o status no banco de dados se necessário
-      
+      if (presence) {
+        const lastSeen = presence.lastSeen;
+        const isOnline = presence.type === 'available';
+        
+        logger.info(`Presença de ${contactId}: ${isOnline ? 'online' : 'offline'}${lastSeen ? ', último visto em: ' + new Date(lastSeen).toISOString() : ''}`);
+        
+        // Aqui você pode salvar informações de presença no banco de dados se necessário
+        // Por exemplo, atualizar o status do contato
+        try {
+          const phoneNumber = contactId.split('@')[0];
+          
+          // Você pode atualizar o status de presença no banco se tiver um campo para isso
+          await Contact.findOneAndUpdate(
+            { phone: phoneNumber },
+            { 
+              lastSeen: lastSeen ? new Date(lastSeen) : undefined,
+              isOnline: isOnline || false,
+              lastUpdated: new Date()
+            },
+            { upsert: false }
+          );
+        } catch (contactError) {
+          logger.warn(`Não foi possível atualizar presença do contato: ${contactError.message}`);
+        }
+      } else {
+        logger.warn(`Dados de presença não disponíveis para ${contactId}`);
+      }
     } catch (error) {
       logger.error('Erro ao processar PRESENCE_UPDATE:', error);
     }
