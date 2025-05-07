@@ -6,17 +6,36 @@
 const logger = require('../utils/logger');
 const { connectToDatabase } = require('../config/database');
 const webhookQueueService = require('../services/webhookQueueService');
-const { Instance, WebhookLog, Message, Campaign, Contact, Alert } = require('../models');
+const mongoose = require('mongoose');
+
+// Importação direta de modelos individuais para garantir que estão carregados
+let Instance, WebhookLog, Message, Campaign, Contact, Alert;
 
 // Garantir que estamos conectados ao banco de dados
 let isConnected = false;
 
-// Função para inicializar a conexão com o banco de dados
+// Função para inicializar a conexão com o banco de dados e carregar os modelos
 const initializeDatabase = async () => {
   if (!isConnected) {
     try {
       await connectToDatabase();
       logger.info('Worker de webhook conectado ao banco de dados com sucesso');
+      
+      // Certifique-se de carregar os modelos após a conexão
+      try {
+        Instance = require('../models/Instance');
+        WebhookLog = require('../models/WebhookLog');
+        Message = require('../models/Message');
+        Campaign = require('../models/Campaign');
+        Contact = require('../models/Contact');
+        Alert = require('../models/Alert');
+        
+        logger.info('Modelos carregados com sucesso');
+      } catch (modelError) {
+        logger.error('Erro ao carregar modelos:', modelError);
+        throw modelError;
+      }
+      
       isConnected = true;
     } catch (error) {
       logger.error('Erro ao conectar ao banco de dados:', error);
@@ -488,8 +507,16 @@ const processWebhookEvent = async (data) => {
       
       // Salvar log do webhook com tratamento de erro
       try {
-        if (WebhookLog && typeof WebhookLog.create === 'function') {
-          await WebhookLog.create(webhookLog);
+        // Verificar se o modelo existe e está acessível
+        if (!WebhookLog) {
+          logger.warn('Modelo WebhookLog não disponível - tentando carregar novamente');
+          WebhookLog = require('../models/WebhookLog');
+        }
+        
+        if (WebhookLog) {
+          const newLog = new WebhookLog(webhookLog);
+          await newLog.save();
+          logger.debug(`Log de webhook salvo com sucesso: ${event}`);
         } else {
           logger.warn('Modelo WebhookLog não disponível para criação de log');
         }
@@ -507,8 +534,16 @@ const processWebhookEvent = async (data) => {
       
       // Salvar log do webhook com tratamento de erro
       try {
-        if (WebhookLog && typeof WebhookLog.create === 'function') {
-          await WebhookLog.create(webhookLog);
+        // Verificar se o modelo existe e está acessível
+        if (!WebhookLog) {
+          logger.warn('Modelo WebhookLog não disponível - tentando carregar novamente');
+          WebhookLog = require('../models/WebhookLog');
+        }
+        
+        if (WebhookLog) {
+          const newLog = new WebhookLog(webhookLog);
+          await newLog.save();
+          logger.debug(`Log de erro de webhook salvo: ${event}`);
         } else {
           logger.warn('Modelo WebhookLog não disponível para criação de log');
         }
@@ -518,10 +553,14 @@ const processWebhookEvent = async (data) => {
       
       // Incrementar contador de falhas
       try {
-        await Instance.findOneAndUpdate(
-          { instanceName },
-          { $inc: { 'webhook.failedWebhooks': 1 } }
-        );
+        if (Instance) {
+          await Instance.findOneAndUpdate(
+            { instanceName },
+            { $inc: { 'webhook.failedWebhooks': 1 } }
+          );
+        } else {
+          logger.warn('Modelo Instance não disponível para atualizar contador de falhas');
+        }
       } catch (instanceError) {
         logger.error('Erro ao atualizar contador de falhas na instância:', instanceError);
       }
