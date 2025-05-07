@@ -4,20 +4,17 @@ const webhookController = require('../controllers/webhookController');
 const { protect, adminMiddleware } = require('../middlewares/authMiddleware');
 const { webhookRateLimit } = require('../middlewares/rateLimitMiddleware');
 
-// Aplicar rate limiting em todas as rotas de webhook
-router.use(webhookRateLimit);
-
 // Rotas públicas (sem autenticação)
 // Rota principal para webhooks da Evolution API
-router.post('/', webhookController.processWebhook);
+router.post('/', webhookRateLimit, webhookController.processWebhook);
 
 // Rotas específicas para cada tipo de evento (opcional, se webhook_by_events=true)
-router.post('/messages-upsert', webhookController.processMessageUpsert);
-router.post('/connection-update', webhookController.processConnectionUpdate);
-router.post('/qrcode-updated', webhookController.processQrCodeUpdated);
-router.post('/messages-update', webhookController.processMessageUpdate);
-router.post('/messages-delete', webhookController.processMessageDelete);
-router.post('/send-message', webhookController.processSendMessage);
+router.post('/messages-upsert', webhookRateLimit, webhookController.processMessageUpsert);
+router.post('/connection-update', webhookRateLimit, webhookController.processConnectionUpdate);
+router.post('/qrcode-updated', webhookRateLimit, webhookController.processQrCodeUpdated);
+router.post('/messages-update', webhookRateLimit, webhookController.processMessageUpdate);
+router.post('/messages-delete', webhookRateLimit, webhookController.processMessageDelete);
+router.post('/send-message', webhookRateLimit, webhookController.processSendMessage);
 
 // Rotas protegidas (requerem autenticação)
 // Rotas de logs (apenas para usuários autenticados)
