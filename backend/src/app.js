@@ -39,7 +39,7 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/instances', instanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/alerts', alertRoutes);
-app.use('/api/webhook', webhookRoutes);
+app.use('/webhook', webhookRoutes);
 
 // Rota de teste
 app.get('/', (req, res) => {
