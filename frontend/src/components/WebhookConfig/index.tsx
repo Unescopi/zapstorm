@@ -171,8 +171,12 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
   const handleSubmit = async () => {
     try {
       setLoading(true);
-      const response = await api.post(`/instances/${instanceId}/webhook`, formData);
-      
+      // Se o campo url estiver vazio, envie null
+      const payload = {
+        ...formData,
+        url: formData.url && formData.url.trim() !== '' ? formData.url : null
+      };
+      const response = await api.post(`/instances/${instanceId}/webhook`, payload);
       if (response.data.success) {
         onSuccess();
         handleClose();
