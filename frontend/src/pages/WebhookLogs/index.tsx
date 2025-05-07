@@ -19,7 +19,8 @@ import {
   Stack,
   Chip,
   IconButton,
-  Tooltip
+  Tooltip,
+  SelectChangeEvent
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import api from '../../services/api';
@@ -74,7 +75,7 @@ const WebhookLogs: React.FC = () => {
     loadLogs();
   }, [page, rowsPerPage, filters]);
 
-  const handleChangePage = (event: unknown, newPage: number) => {
+  const handleChangePage = (_event: unknown, newPage: number) => {
     setPage(newPage);
   };
 
@@ -83,7 +84,19 @@ const WebhookLogs: React.FC = () => {
     setPage(0);
   };
 
-  const handleFilterChange = (field: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTextFieldChange = (field: string) => (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    setFilters(prev => ({
+      ...prev,
+      [field]: event.target.value
+    }));
+    setPage(0);
+  };
+
+  const handleSelectChange = (field: string) => (
+    event: SelectChangeEvent
+  ) => {
     setFilters(prev => ({
       ...prev,
       [field]: event.target.value
@@ -132,14 +145,14 @@ const WebhookLogs: React.FC = () => {
             label="Instância"
             size="small"
             value={filters.instanceName}
-            onChange={handleFilterChange('instanceName')}
+            onChange={handleTextFieldChange('instanceName')}
           />
           <FormControl size="small" sx={{ minWidth: 120 }}>
             <InputLabel>Evento</InputLabel>
             <Select
               value={filters.event}
               label="Evento"
-              onChange={handleFilterChange('event')}
+              onChange={handleSelectChange('event')}
             >
               <MenuItem value="">Todos</MenuItem>
               <MenuItem value="CONNECTION_UPDATE">Atualização de Conexão</MenuItem>
@@ -155,7 +168,7 @@ const WebhookLogs: React.FC = () => {
             <Select
               value={filters.status}
               label="Status"
-              onChange={handleFilterChange('status')}
+              onChange={handleSelectChange('status')}
             >
               <MenuItem value="">Todos</MenuItem>
               <MenuItem value="success">Sucesso</MenuItem>
