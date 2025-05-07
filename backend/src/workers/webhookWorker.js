@@ -8,6 +8,23 @@ const { connectToDatabase } = require('../config/database');
 const webhookQueueService = require('../services/webhookQueueService');
 const { Instance, WebhookLog, Message, Campaign, Contact, Alert } = require('../models');
 
+// Garantir que estamos conectados ao banco de dados
+let isConnected = false;
+
+// Função para inicializar a conexão com o banco de dados
+const initializeDatabase = async () => {
+  if (!isConnected) {
+    try {
+      await connectToDatabase();
+      logger.info('Worker de webhook conectado ao banco de dados com sucesso');
+      isConnected = true;
+    } catch (error) {
+      logger.error('Erro ao conectar ao banco de dados:', error);
+      throw error;
+    }
+  }
+};
+
 // Importações de controladores necessários para processamento
 const functions = {
   handleConnectionUpdate: async (instanceName, data) => {
@@ -21,14 +38,18 @@ const functions = {
       
       // Criar alerta para certos status
       if (['DISCONNECTED', 'CONNECTED'].includes(status)) {
-        await Alert.create({
-          type: status === 'CONNECTED' ? 'success' : 'warning',
-          title: status === 'CONNECTED' ? 'Instância Conectada' : 'Instância Desconectada',
-          message: `A instância ${instanceName} está ${status === 'CONNECTED' ? 'online' : 'offline'}`,
-          source: 'whatsapp',
-          sourceId: instanceName,
-          read: false
-        });
+        try {
+          await Alert.create({
+            type: status === 'CONNECTED' ? 'success' : 'warning',
+            title: status === 'CONNECTED' ? 'Instância Conectada' : 'Instância Desconectada',
+            message: `A instância ${instanceName} está ${status === 'CONNECTED' ? 'online' : 'offline'}`,
+            source: 'whatsapp',
+            sourceId: instanceName,
+            read: false
+          });
+        } catch (alertError) {
+          logger.error('Erro ao criar alerta de conexão:', alertError);
+        }
       }
       
       logger.info(`Status da instância ${instanceName} atualizado para ${status}`);
@@ -204,7 +225,6 @@ const functions = {
       logger.info(`Processando ${data.chats.length} atualizações de chats para instância ${instanceName}`);
       
       // Por enquanto apenas logamos as atualizações de chat
-      // Você pode expandir esta função para salvar informações dos chats no banco de dados se necessário
       for (const chat of data.chats) {
         logger.info(`Chat atualizado: ${chat.id} em ${instanceName}`);
       }
@@ -222,17 +242,9 @@ const functions = {
       
       logger.info(`Processando ${data.contacts.length} atualizações de contatos para instância ${instanceName}`);
       
-      for (const contactData of data.contacts) {
-        if (!contactData.id) continue;
-        
-        const phoneNumber = contactData.id.split('@')[0];
-        
-        // Atualizar ou criar contato
-        await upsertContact(instanceName, {
-          id: contactData.id,
-          name: contactData.name || contactData.pushName,
-          number: phoneNumber
-        });
+      // Por enquanto apenas logamos as atualizações de contato
+      for (const contact of data.contacts) {
+        logger.info(`Contato atualizado: ${contact.id} em ${instanceName}`);
       }
     } catch (error) {
       logger.error('Erro ao processar contacts.update:', error);
@@ -405,6 +417,9 @@ const saveMessage = async (instanceName, messageData) => {
  */
 const processWebhookEvent = async (data) => {
   try {
+    // Garantir conexão com o banco de dados
+    await initializeDatabase();
+    
     const { instanceName, event, body } = data;
     
     // Validar dados necessários
@@ -471,8 +486,16 @@ const processWebhookEvent = async (data) => {
       // Finalizar o log com sucesso
       webhookLog.processingTimeMs = Date.now() - webhookLog.processingStart;
       
-      // Salvar log do webhook
-      await WebhookLog.create(webhookLog);
+      // Salvar log do webhook com tratamento de erro
+      try {
+        if (WebhookLog && typeof WebhookLog.create === 'function') {
+          await WebhookLog.create(webhookLog);
+        } else {
+          logger.warn('Modelo WebhookLog não disponível para criação de log');
+        }
+      } catch (logError) {
+        logger.error('Erro ao salvar log de webhook:', logError);
+      }
       
       return true;
     } catch (error) {
@@ -482,14 +505,26 @@ const processWebhookEvent = async (data) => {
       webhookLog.responseStatus = 500;
       webhookLog.responseMessage = `Erro: ${error.message}`;
       
-      // Salvar log do webhook
-      await WebhookLog.create(webhookLog);
+      // Salvar log do webhook com tratamento de erro
+      try {
+        if (WebhookLog && typeof WebhookLog.create === 'function') {
+          await WebhookLog.create(webhookLog);
+        } else {
+          logger.warn('Modelo WebhookLog não disponível para criação de log');
+        }
+      } catch (logError) {
+        logger.error('Erro ao salvar log de webhook com erro:', logError);
+      }
       
       // Incrementar contador de falhas
-      await Instance.findOneAndUpdate(
-        { instanceName },
-        { $inc: { 'webhook.failedWebhooks': 1 } }
-      );
+      try {
+        await Instance.findOneAndUpdate(
+          { instanceName },
+          { $inc: { 'webhook.failedWebhooks': 1 } }
+        );
+      } catch (instanceError) {
+        logger.error('Erro ao atualizar contador de falhas na instância:', instanceError);
+      }
       
       throw error;
     }
@@ -500,30 +535,27 @@ const processWebhookEvent = async (data) => {
 };
 
 /**
- * Inicializa o worker
+ * Inicializa o worker de webhook
  */
-async function startWorker() {
-  logger.info('Iniciando worker de processamento de webhooks...');
-  
+const initializeWorker = async () => {
   try {
+    logger.info('Iniciando worker de webhooks...');
+    
     // Conectar ao banco de dados
-    await connectToDatabase();
-    logger.info('Conectado ao banco de dados');
+    await initializeDatabase();
     
-    // Inicializar o serviço de fila
+    // Inicializar serviço de fila
     await webhookQueueService.initialize();
-    logger.info('Serviço de fila inicializado');
     
-    // Registrar o processador
+    // Registrar processador para a fila
     await webhookQueueService.registerProcessor(processWebhookEvent);
-    logger.info('Processador de webhooks registrado');
     
     logger.info('Worker de webhooks inicializado com sucesso, aguardando eventos...');
   } catch (error) {
     logger.error('Erro ao inicializar worker de webhooks:', error);
     process.exit(1);
   }
-}
+};
 
 // Iniciar o worker
-startWorker(); 
+initializeWorker(); 
