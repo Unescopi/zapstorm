@@ -192,6 +192,51 @@ const functions = {
     } catch (error) {
       logger.error('Erro ao processar PRESENCE_UPDATE:', error);
     }
+  },
+
+  handleChatsUpdate: async (instanceName, data) => {
+    try {
+      if (!data.chats || !Array.isArray(data.chats)) {
+        logger.warn('Evento chats.update recebido sem chats válidos');
+        return;
+      }
+      
+      logger.info(`Processando ${data.chats.length} atualizações de chats para instância ${instanceName}`);
+      
+      // Por enquanto apenas logamos as atualizações de chat
+      // Você pode expandir esta função para salvar informações dos chats no banco de dados se necessário
+      for (const chat of data.chats) {
+        logger.info(`Chat atualizado: ${chat.id} em ${instanceName}`);
+      }
+    } catch (error) {
+      logger.error('Erro ao processar chats.update:', error);
+    }
+  },
+
+  handleContactsUpdate: async (instanceName, data) => {
+    try {
+      if (!data.contacts || !Array.isArray(data.contacts)) {
+        logger.warn('Evento contacts.update recebido sem contatos válidos');
+        return;
+      }
+      
+      logger.info(`Processando ${data.contacts.length} atualizações de contatos para instância ${instanceName}`);
+      
+      for (const contactData of data.contacts) {
+        if (!contactData.id) continue;
+        
+        const phoneNumber = contactData.id.split('@')[0];
+        
+        // Atualizar ou criar contato
+        await upsertContact(instanceName, {
+          id: contactData.id,
+          name: contactData.name || contactData.pushName,
+          number: phoneNumber
+        });
+      }
+    } catch (error) {
+      logger.error('Erro ao processar contacts.update:', error);
+    }
   }
 };
 
@@ -409,6 +454,14 @@ const processWebhookEvent = async (data) => {
           
         case 'PRESENCE_UPDATE':
           await functions.handlePresenceUpdate(instanceName, body);
+          break;
+
+        case 'chats.update':
+          await functions.handleChatsUpdate(instanceName, body);
+          break;
+
+        case 'contacts.update':
+          await functions.handleContactsUpdate(instanceName, body);
           break;
           
         default:
