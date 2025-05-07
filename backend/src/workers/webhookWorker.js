@@ -101,23 +101,41 @@ const functions = {
   
   handleMessagesUpdate: async (instanceName, data) => {
     try {
-      if (!data.messages || !Array.isArray(data.messages)) return;
+      if (!data.messages || !Array.isArray(data.messages)) {
+        logger.warn('Evento MESSAGES_UPDATE recebido sem mensagens válidas');
+        return;
+      }
+      
+      logger.info(`Processando ${data.messages.length} atualizações de mensagens para instância ${instanceName}`);
       
       // Processar cada atualização de mensagem
       for (const update of data.messages) {
-        if (!update.key?.id) continue;
+        if (!update.key?.id) {
+          logger.warn('Atualização de mensagem sem ID, ignorando');
+          continue;
+        }
+        
+        const status = determineMessageStatus(update);
+        logger.info(`Atualizando mensagem ${update.key.id} para status: ${status}`);
         
         // Atualizar status da mensagem
-        await Message.findOneAndUpdate(
+        const result = await Message.findOneAndUpdate(
           { messageId: update.key.id },
           {
-            status: determineMessageStatus(update),
+            status: status,
             lastUpdated: new Date()
           }
         );
+        
+        if (result) {
+          logger.info(`Mensagem ${update.key.id} atualizada com sucesso para status ${status}`);
+        } else {
+          logger.warn(`Mensagem ${update.key.id} não encontrada no banco de dados`);
+        }
       }
     } catch (error) {
       logger.error('Erro ao processar MESSAGES_UPDATE:', error);
+      logger.error('Payload recebido:', JSON.stringify(data));
     }
   },
   
@@ -199,12 +217,19 @@ const determineMessageType = (message) => {
 };
 
 const determineMessageStatus = (update) => {
+  // Verificar status direto no objeto
   if (update.status) return update.status.toLowerCase();
+  
+  // Verificar no objeto update
+  if (update.update?.status) return update.update.status.toLowerCase();
+  
+  // Verificar em message.status
+  if (update.message?.status) return update.message.status.toLowerCase();
   
   // Status baseado nos campos disponíveis
   if (update.key?.fromMe === false) return 'received';
-  if (update.update?.status) return update.update.status.toLowerCase();
   
+  // Se nenhum status for encontrado
   return 'unknown';
 };
 
