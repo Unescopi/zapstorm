@@ -26,7 +26,9 @@ app.use(express.json());
 app.use(cors());
 
 // Configurar trust proxy para uso com Nginx/load balancers
-app.set('trust proxy', true);
+// app.set('trust proxy', true);
+// Usando uma configuração mais segura para trust proxy
+app.set('trust proxy', '127.0.0.1, loopback, linklocal, uniquelocal');
 
 // Conectar ao MongoDB
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/zapstorm')

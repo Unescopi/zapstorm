@@ -500,30 +500,37 @@ const processWebhookEvent = async (data) => {
       // Processar diferentes tipos de eventos
       switch (event) {
         case 'CONNECTION_UPDATE':
+        case 'connection.update':
           await functions.handleConnectionUpdate(instanceName, body);
           break;
           
         case 'QRCODE_UPDATED':
+        case 'qrcode.update':
           await functions.handleQrCodeUpdated(instanceName, body);
           break;
           
         case 'MESSAGES_UPSERT':
+        case 'messages.upsert':
           await functions.handleMessagesUpsert(instanceName, body);
           break;
           
         case 'MESSAGES_UPDATE':
+        case 'messages.update':
           await functions.handleMessagesUpdate(instanceName, body);
           break;
           
         case 'MESSAGES_DELETE':
+        case 'messages.delete':
           await functions.handleMessagesDelete(instanceName, body);
           break;
           
         case 'SEND_MESSAGE':
+        case 'send.message':
           await functions.handleSendMessage(instanceName, body);
           break;
           
         case 'PRESENCE_UPDATE':
+        case 'presence.update':
           await functions.handlePresenceUpdate(instanceName, body);
           break;
 

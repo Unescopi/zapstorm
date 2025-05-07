@@ -11,6 +11,13 @@ const apiLimiter = rateLimit({
   max: 300, // Limite de 300 requisições por IP por janela
   standardHeaders: true,
   legacyHeaders: false,
+  // Configuração customizada para trust proxy
+  trustProxy: true,
+  // Gerador de chave personalizado para tratar diferentes configurações de proxy
+  keyGenerator: (req) => {
+    // Usar IP "real" quando por trás de um proxy
+    return req.ip || req.connection.remoteAddress;
+  },
   handler: (req, res) => {
     logger.warn(`Rate limit excedido para IP ${req.ip}`);
     return res.status(429).json({
@@ -26,6 +33,13 @@ const authLimiter = rateLimit({
   max: 20, // Limite de 20 tentativas de login por IP por hora
   standardHeaders: true,
   legacyHeaders: false,
+  // Configuração customizada para trust proxy
+  trustProxy: true,
+  // Gerador de chave personalizado para tratar diferentes configurações de proxy
+  keyGenerator: (req) => {
+    // Usar IP "real" quando por trás de um proxy
+    return req.ip || req.connection.remoteAddress;
+  },
   handler: (req, res) => {
     logger.warn(`Rate limit de autenticação excedido para IP ${req.ip}`);
     return res.status(429).json({
@@ -41,8 +55,17 @@ const webhookRateLimit = rateLimit({
   max: 500, // Limite de 500 webhooks por minuto
   standardHeaders: true,
   legacyHeaders: false,
+  // Configuração customizada para trust proxy
+  trustProxy: true,
+  // Gerador de chave personalizado para tratar diferentes configurações de proxy
+  keyGenerator: (req) => {
+    // Para webhooks, podemos limitar por instância em vez de IP
+    const instanceName = req.body?.instanceName || 'unknown';
+    return `webhook:${instanceName}`;
+  },
   handler: (req, res) => {
-    logger.warn(`Rate limit de webhook excedido`);
+    const instanceName = req.body?.instanceName || 'unknown';
+    logger.warn(`Rate limit de webhook excedido para instância ${instanceName}`);
     
     // Ainda retornamos 200 para não fazer a API externa reenviar
     return res.status(200).json({
