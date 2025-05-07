@@ -508,8 +508,8 @@ exports.configureWebhook = async (req, res) => {
     const { id } = req.params;
     const { enabled, url, events, secretKey } = req.body;
     
-    // Validar URL se estiver habilitado
-    if (enabled && (!url || !url.startsWith('http'))) {
+    // Só valida a URL se ela foi preenchida
+    if (enabled && url && !url.startsWith('http')) {
       return res.status(400).json({
         success: false,
         message: 'URL de webhook inválida'
