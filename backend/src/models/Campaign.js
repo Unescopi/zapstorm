@@ -13,7 +13,7 @@ const campaignSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'queued', 'running', 'paused', 'completed', 'failed', 'canceled'],
+    enum: ['draft', 'queued', 'running', 'paused', 'completed', 'failed', 'canceled', 'master'],
     default: 'draft'
   },
   schedule: {
@@ -93,6 +93,51 @@ const campaignSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Instance',
     required: [true, 'Uma instância deve ser associada à campanha']
+  },
+  // Novos campos para sistema de batch
+  segmentSize: {
+    type: Number,
+    default: 100,
+    description: 'Tamanho máximo de cada grupo de contatos para envio seguro'
+  },
+  batchInterval: {
+    type: Number,
+    default: 7200000, // 2 horas em ms
+    description: 'Intervalo entre cada batch em milissegundos'
+  },
+  // Campos para gerenciamento de batches
+  batchMode: {
+    type: Boolean,
+    default: false,
+    description: 'Indica se esta campanha está em modo de batches'
+  },
+  batchCampaigns: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Campaign',
+    description: 'Lista de IDs das sub-campanhas (batches)'
+  }],
+  // Campos para identificar sub-campanhas (batches)
+  isSubCampaign: {
+    type: Boolean,
+    default: false,
+    description: 'Indica se esta campanha é um batch de outra campanha'
+  },
+  parentCampaignId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Campaign',
+    description: 'ID da campanha principal (quando esta é um batch)'
+  },
+  batchNumber: {
+    type: Number,
+    description: 'Número do batch em relação ao total (1 a N)'
+  },
+  totalBatches: {
+    type: Number,
+    description: 'Número total de batches na campanha principal'
+  },
+  batchSize: {
+    type: Number,
+    description: 'Quantidade de contatos em cada batch'
   }
 });
 

@@ -337,12 +337,121 @@ const startCampaign = async (campaign) => {
     
     logger.info(`Configuração de throttling: batchSize=${batchSize}, batchDelay=${batchDelay}ms`);
     
+    // Verificar se devemos levar em conta "quiet hours" antes de iniciar a campanha
+    if (instance.throttling?.quietHoursEnabled) {
+      const currentHour = new Date().getHours();
+      const startHour = instance.throttling.quietHoursStart || 22;
+      const endHour = instance.throttling.quietHoursEnd || 8;
+      
+      // Verificar se a hora atual está no período de silêncio
+      const isInQuietHours = (startHour > endHour) 
+        ? (currentHour >= startHour || currentHour < endHour) // período atravessa meia-noite
+        : (currentHour >= startHour && currentHour < endHour); // período normal
+      
+      if (isInQuietHours) {
+        logger.warn(`Campanha ${campaign._id} iniciada durante período de silêncio (${startHour}h-${endHour}h). Mensagens serão enfileiradas com atraso para evitar bloqueio.`);
+        
+        // Calcular a hora de término do período de silêncio
+        const waitUntil = new Date();
+        if (currentHour >= startHour) {
+          // Configurar para o final do período de silêncio no dia seguinte
+          waitUntil.setDate(waitUntil.getDate() + 1);
+          waitUntil.setHours(endHour, 0, 0, 0);
+        } else {
+          // Configurar para o final do período de silêncio hoje
+          waitUntil.setHours(endHour, 0, 0, 0);
+        }
+        
+        // Atualizar todas as mensagens para terem um atraso
+        for (const message of messages) {
+          message.status = 'scheduled_retry';
+          message.scheduledRetryAt = waitUntil;
+        }
+        
+        // Atualizar o status da campanha
+        await Campaign.findByIdAndUpdate(
+          campaign._id,
+          {
+            status: 'scheduled',
+            lastUpdated: Date.now()
+          }
+        );
+        
+        logger.info(`Campanha ${campaign._id} reagendada para iniciar às ${waitUntil.toLocaleTimeString()} devido ao período de silêncio`);
+      }
+    }
+    
+    // Verificar limite diário antes de iniciar a campanha
+    if (instance.throttling?.dailyLimit) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      // Contar mensagens enviadas hoje para esta instância
+      const dailySentCount = await Message.countDocuments({
+        instanceId: instance._id,
+        status: 'sent',
+        sentAt: { $gte: today, $lt: tomorrow }
+      });
+      
+      // Verificar quantas mensagens ainda podemos enviar hoje
+      const remainingDaily = Math.max(0, instance.throttling.dailyLimit - dailySentCount);
+      
+      if (remainingDaily === 0) {
+        // Reagendar toda a campanha para amanhã
+        logger.warn(`Limite diário de ${instance.throttling.dailyLimit} mensagens atingido. Campanha ${campaign._id} será reagendada para amanhã.`);
+        
+        // Definir para 8h da manhã seguinte
+        const tomorrowStart = new Date(tomorrow.getTime() + 8 * 3600000);
+        
+        // Atualizar todas as mensagens para terem um atraso
+        for (const message of messages) {
+          message.status = 'scheduled_retry';
+          message.scheduledRetryAt = tomorrowStart;
+        }
+        
+        // Atualizar o status da campanha
+        await Campaign.findByIdAndUpdate(
+          campaign._id,
+          {
+            status: 'scheduled',
+            lastUpdated: Date.now()
+          }
+        );
+        
+        logger.info(`Campanha ${campaign._id} reagendada para iniciar às ${tomorrowStart.toLocaleTimeString()} devido ao limite diário`);
+      } else if (remainingDaily < messages.length) {
+        // Dividir a campanha: algumas mensagens hoje, o resto amanhã
+        logger.warn(`Limite diário restante (${remainingDaily}) menor que total de mensagens (${messages.length}). Dividindo a campanha.`);
+        
+        // Definir para 8h da manhã seguinte
+        const tomorrowStart = new Date(tomorrow.getTime() + 8 * 3600000);
+        
+        // Separar as mensagens que podem ser enviadas hoje
+        const messagesTodayCount = remainingDaily;
+        const messagesTomorrow = messages.slice(messagesTodayCount);
+        
+        // Atualizar as mensagens de amanhã para terem um atraso
+        for (const message of messagesTomorrow) {
+          message.status = 'scheduled_retry';
+          message.scheduledRetryAt = tomorrowStart;
+        }
+        
+        logger.info(`${messagesTodayCount} mensagens serão enviadas hoje e ${messagesTomorrow.length} amanhã às ${tomorrowStart.toLocaleTimeString()}`);
+      }
+    }
+    
     try {
-      // Usar o método de enfileiramento em lote
+      // Usar o método de enfileiramento em lote com as novas opções de throttling
       logger.info(`Tentando enfileirar ${messages.length} mensagens para a campanha ${campaign._id}`);
       const queueResult = await queueService.enqueueMessageBatch(messages, {
         batchSize,
-        delay: batchDelay
+        delay: batchDelay,
+        randomizeDelay: instance.throttling?.randomizeDelay || true,
+        minDelayVariation: instance.throttling?.minDelayVariation || 0.8,
+        maxDelayVariation: instance.throttling?.maxDelayVariation || 1.2
       });
       
       logger.info(`Resultado do enfileiramento: ${JSON.stringify(queueResult)}`);

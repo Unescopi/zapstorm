@@ -161,6 +161,12 @@ const WebhookLogs: React.FC = () => {
               <MenuItem value="MESSAGES_UPDATE">Atualização de Mensagens</MenuItem>
               <MenuItem value="MESSAGES_DELETE">Mensagens Apagadas</MenuItem>
               <MenuItem value="SEND_MESSAGE">Envio de Mensagens</MenuItem>
+              <MenuItem value="PRESENCE_UPDATE">Atualizações de Presença</MenuItem>
+              <MenuItem value="CHATS_UPDATE">Atualizações de Chats</MenuItem>
+              <MenuItem value="CONTACTS_UPDATE">Atualizações de Contatos</MenuItem>
+              <MenuItem value="presence.update">Presença (Evolution API)</MenuItem>
+              <MenuItem value="chats.update">Chats (Evolution API)</MenuItem>
+              <MenuItem value="contacts.update">Contatos (Evolution API)</MenuItem>
             </Select>
           </FormControl>
           <FormControl size="small" sx={{ minWidth: 120 }}>

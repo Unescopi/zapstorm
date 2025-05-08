@@ -46,7 +46,10 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
       MESSAGES_UPSERT: true,
       MESSAGES_UPDATE: true,
       MESSAGES_DELETE: false,
-      SEND_MESSAGE: true
+      SEND_MESSAGE: true,
+      PRESENCE_UPDATE: false,
+      CHATS_UPDATE: false,
+      CONTACTS_UPDATE: false
     }
   });
   const [stats, setStats] = useState({
@@ -78,7 +81,10 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
             MESSAGES_UPSERT: true,
             MESSAGES_UPDATE: true,
             MESSAGES_DELETE: false,
-            SEND_MESSAGE: true
+            SEND_MESSAGE: true,
+            PRESENCE_UPDATE: false,
+            CHATS_UPDATE: false,
+            CONTACTS_UPDATE: false
           }
         });
       }
@@ -379,6 +385,42 @@ const WebhookConfig: React.FC<WebhookConfigProps> = ({ instanceId, instanceName,
                                 />
                               }
                               label="Envio de mensagens"
+                            />
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  name="PRESENCE_UPDATE"
+                                  checked={formData.events.PRESENCE_UPDATE}
+                                  onChange={handleEventChange}
+                                />
+                              }
+                              label="Atualizações de presença"
+                            />
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  name="CHATS_UPDATE"
+                                  checked={formData.events.CHATS_UPDATE}
+                                  onChange={handleEventChange}
+                                />
+                              }
+                              label="Atualizações de chats"
+                            />
+                          </Box>
+                          <Box sx={{ width: { xs: '100%', sm: '45%' }, mb: 1 }}>
+                            <FormControlLabel
+                              control={
+                                <Switch
+                                  name="CONTACTS_UPDATE"
+                                  checked={formData.events.CONTACTS_UPDATE}
+                                  onChange={handleEventChange}
+                                />
+                              }
+                              label="Atualizações de contatos"
                             />
                           </Box>
                         </Stack>

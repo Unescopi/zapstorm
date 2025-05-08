@@ -13,6 +13,7 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const alertRoutes = require('./routes/alertRoutes');
+const healthRoutes = require('./routes/healthRoutes');
 const { errorHandler } = require('./middlewares/errorMiddleware');
 
 // Carregar variáveis de ambiente
@@ -45,6 +46,7 @@ app.use('/api/instances', instanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/webhook', webhookRoutes);
+app.use('/api/health', healthRoutes);
 
 // Rota de teste
 app.get('/', (req, res) => {

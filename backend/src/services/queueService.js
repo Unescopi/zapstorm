@@ -313,9 +313,15 @@ class QueueService {
    * @param {Object} options Opções para envio em lote
    */
   async enqueueMessageBatch(messages, options = {}) {
-    const { batchSize = 50, delay = 5000 } = options;
+    const { 
+      batchSize = 50, 
+      delay = 5000,
+      randomizeDelay = true,  // Adicionar variação aleatória no delay
+      minDelayVariation = 0.8, // 80% do delay base no mínimo
+      maxDelayVariation = 1.2  // 120% do delay base no máximo
+    } = options;
     
-    logger.info(`[queueService] Iniciando enfileiramento em lote: ${messages.length} mensagens, batchSize=${batchSize}, delay=${delay}ms`);
+    logger.info(`[queueService] Iniciando enfileiramento em lote: ${messages.length} mensagens, batchSize=${batchSize}, delay=${delay}ms com variação aleatória=${randomizeDelay}`);
     
     try {
       // Verificar conexão
@@ -346,7 +352,10 @@ class QueueService {
         const batch = batches[i];
         logger.info(`[queueService] Processando lote ${i+1}/${batches.length} com ${batch.length} mensagens`);
         
-        for (const message of batch) {
+        // Aplicar uma distribuição natural às mensagens dentro do lote
+        // Adicionar pequenos atrasos entre as mensagens dentro do mesmo lote 
+        for (let j = 0; j < batch.length; j++) {
+          const message = batch[j];
           const messageId = message._id || message.id || 'unknown';
           const payload = {
             _id: messageId.toString(),
@@ -373,6 +382,15 @@ class QueueService {
             } else {
               logger.debug(`[queueService] Mensagem ${messageId} enfileirada com sucesso`);
             }
+            
+            // Pequeno atraso entre mensagens do mesmo lote para distribuição mais natural
+            // Exceto para a última mensagem do lote
+            if (j < batch.length - 1) {
+              const microDelay = Math.floor(delay / batchSize / 3); // Delay pequeno entre mensagens
+              if (microDelay > 5) { // Só aplicar se o micro delay for maior que 5ms
+                await new Promise(resolve => setTimeout(resolve, microDelay));
+              }
+            }
           } catch (publishError) {
             logger.error(`[queueService] Erro ao publicar mensagem ${messageId}: ${publishError.message}`);
             throw publishError;
@@ -381,10 +399,19 @@ class QueueService {
         
         logger.info(`[queueService] Lote ${i+1} publicado com sucesso com ${batch.length} mensagens`);
         
-        // Adicionar atraso entre lotes (exceto o último)
+        // Adicionar atraso entre lotes (exceto o último) com variação aleatória
         if (i < batches.length - 1 && delay > 0) {
-          logger.debug(`[queueService] Aguardando ${delay}ms antes do próximo lote...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          let actualDelay = delay;
+          
+          // Adicionar variação aleatória ao delay entre lotes para parecer mais natural
+          if (randomizeDelay) {
+            const variation = minDelayVariation + Math.random() * (maxDelayVariation - minDelayVariation);
+            actualDelay = Math.floor(delay * variation);
+            logger.debug(`[queueService] Aplicando delay com variação aleatória: ${actualDelay}ms (${Math.round(variation * 100)}% do padrão)`);
+          }
+          
+          logger.debug(`[queueService] Aguardando ${actualDelay}ms antes do próximo lote...`);
+          await new Promise(resolve => setTimeout(resolve, actualDelay));
         }
       }
       

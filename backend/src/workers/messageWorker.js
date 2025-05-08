@@ -30,6 +30,10 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/zapstorm')
     process.exit(1);
   });
 
+// Variáveis para controle de throttling global
+let lastMessageProcessedTime = 0;
+let processingLock = false;
+
 // Função para processar mensagem de texto
 async function processTextMessage(message, instance, evolutionApi) {
   try {
@@ -124,35 +128,68 @@ async function processTextMessage(message, instance, evolutionApi) {
 // Função para processar mensagem com mídia
 async function processMediaMessage(message, instance, evolutionApi) {
   try {
-    const { mediaUrl, mediaType, content } = message;
+    const phone = message.contact.phone;
+    const mediaUrl = message.mediaUrl;
+    const mediaType = message.mediaType;
+    const content = message.content;
+    
+    // Implementar delay extra para mensagens de mídia
+    const mediaDelayMultiplier = instance.throttling?.mediaDelayMultiplier || 2.5;
+    const baseDelay = instance.throttling?.batchDelay || 10000;
+    const perBatch = instance.throttling?.perBatch || 20;
+    const mediaDelay = Math.ceil(baseDelay * mediaDelayMultiplier / perBatch);
+    
+    logger.info(`[messageWorker] Aplicando delay adicional para mídia: ${mediaDelay}ms (fator: ${mediaDelayMultiplier}x)`);
+    await new Promise(resolve => setTimeout(resolve, mediaDelay));
+    
+    // Verificar limite diário (se configurado)
+    if (instance.throttling?.dailyLimit) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      // Contar mensagens enviadas hoje para esta instância
+      const dailySentCount = await Message.countDocuments({
+        instanceId: instance._id,
+        status: 'sent',
+        sentAt: { $gte: today, $lt: tomorrow }
+      });
+      
+      if (dailySentCount >= instance.throttling.dailyLimit) {
+        logger.warn(`[messageWorker] Limite diário de ${instance.throttling.dailyLimit} mensagens atingido para instância ${instance.instanceName}`);
+        throw new Error(`Limite diário de mensagens atingido (${dailySentCount}/${instance.throttling.dailyLimit})`);
+      }
+      
+      // Log para monitoramento
+      logger.info(`[messageWorker] Contagem diária: ${dailySentCount}/${instance.throttling.dailyLimit}`);
+    }
+    
+    logger.info(`Tentando enviar mensagem de mídia (${mediaType}) para ${phone}, URL: ${mediaUrl}`);
+    console.log(`Tentando enviar mensagem de mídia (${mediaType}) para ${phone}, URL: ${mediaUrl}`);
     
     // Atualizar status da mensagem para 'enviando'
     await Message.findByIdAndUpdate(message._id, {
-      status: 'queued',
-      retries: message.retries + 1
+      status: 'sending'
     });
     
     // Enviar mensagem via API Evolution
-    console.log(`Tentando enviar mensagem de mídia (${mediaType}) para ${message.contact.phone}, URL: ${mediaUrl}`);
     const response = await evolutionApi.sendMedia(
       instance.instanceName, 
-      message.contact.phone, 
+      phone, 
       mediaUrl, 
       content, 
       mediaType
     );
     
-    console.log(`Resposta da API Evolution para envio de mídia: ${JSON.stringify(response)}`);
-    
-    if (response && response.key) {
-      // Mensagem enviada com sucesso
-      logger.info(`Mensagem com mídia enviada com sucesso: ${message._id}`);
-      console.log(`Mensagem com mídia enviada com sucesso: ${message._id}`);
-      
+    // Verificar resposta
+    if (response && response.success) {
+      // Atualizar status da mensagem
       await Message.findByIdAndUpdate(message._id, {
         status: 'sent',
-        messageId: response.key.id,
-        sentAt: new Date()
+        sentAt: new Date(),
+        messageId: response.key?.id || null
       });
       
       // Atualizar métricas da campanha
@@ -165,6 +202,8 @@ async function processMediaMessage(message, instance, evolutionApi) {
         $inc: { 'metrics.totalSent': 1 }
       });
       
+      logger.info(`Mensagem ${message._id} enviada com sucesso para ${phone}`);
+      
       await checkAndCompleteCampaignIfNeeded(message.campaignId);
       
       return true;
@@ -172,30 +211,45 @@ async function processMediaMessage(message, instance, evolutionApi) {
       throw new Error('Resposta inválida da API Evolution');
     }
   } catch (error) {
-    logger.error(`Erro ao enviar mensagem com mídia ${message._id}:`, error);
+    logger.error(`Erro ao enviar mensagem de mídia ${message._id}:`, error);
     
-    // Verificar se é um erro recuperável ou não
-    const isRecoverable = !error.message.includes('not-whatsapp-user') && 
-                          !error.message.includes('blocked') &&
-                          message.retries < 3;
+    // Verificar se é um erro temporário para tentar novamente
+    const isTemporaryError = 
+      error.message.includes('timeout') || 
+      error.message.includes('socket hang up') ||
+      error.message.includes('ECONNRESET') ||
+      error.message.includes('rate limit') ||
+      error.code === 'ETIMEDOUT';
     
-    if (isRecoverable) {
-      // Agendar reenvio
-      const retryDelay = Math.pow(2, message.retries) * 30000; // Backoff exponencial
+    // Verificar número de tentativas
+    const retries = (message.retries || 0) + 1;
+    const maxRetries = instance.throttling?.maxRetries || 3;
+    
+    if (isTemporaryError && retries < maxRetries) {
+      // Calcular delay para nova tentativa com backoff exponencial
+      const retryDelay = Math.pow(2, retries) * 30000; // Backoff exponencial
+      
+      // Atualizar status da mensagem para retry
       await Message.findByIdAndUpdate(message._id, {
         status: 'scheduled_retry',
-        errorDetails: error.message,
+        retries,
         scheduledRetryAt: new Date(Date.now() + retryDelay),
-        $inc: { retries: 1 }
-      });
-      message.retries = (message.retries || 0) + 1;
-      await queueService.enqueueRetry(message, retryDelay);
-    } else {
-      // Falha permanente
-      await Message.findByIdAndUpdate(message._id, {
-        status: 'failed',
         errorDetails: error.message
       });
+      
+      logger.info(`Mensagem ${message._id} agendada para retry em ${retryDelay/1000} segundos. Tentativa ${retries}/${maxRetries}`);
+      
+      // Enfileirar para retry após o delay
+      await queueService.enqueueRetry(message, retryDelay);
+    } else {
+      // Atualizar status da mensagem para falha definitiva
+      await Message.findByIdAndUpdate(message._id, {
+        status: 'failed',
+        retries,
+        errorDetails: error.message
+      });
+      
+      logger.error(`Falha definitiva ao enviar mensagem ${message._id}: ${error.message}`);
       
       // Atualizar métricas da campanha
       await Campaign.findByIdAndUpdate(message.campaignId, {
@@ -220,10 +274,13 @@ async function processMediaMessage(message, instance, evolutionApi) {
 
 // Processador principal de mensagens
 async function processMessage(message) {
-  logger.info(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
-  console.log(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
-  
   try {
+    // Aplicar throttling global
+    await applyThrottling(message);
+    
+    logger.info(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
+    console.log(`[messageWorker] Recebida mensagem para processamento - ID: ${message._id}`);
+    
     // Buscar dados completos da mensagem se não estiverem presentes
     if (!message.contact || !message.contact.phone) {
       logger.info(`[messageWorker] Buscando dados completos da mensagem ${message._id}`);
@@ -307,6 +364,187 @@ async function processMessage(message) {
     logger.error(`[messageWorker] Erro ao processar mensagem ${message._id || 'desconhecida'}:`, error);
     logger.error(`[messageWorker] Stack trace: ${error.stack}`);
     return false;
+  } finally {
+    // Liberar o lock de processamento
+    processingLock = false;
+  }
+}
+
+/**
+ * Aplica throttling baseado nas configurações da instância
+ * @param {Object} message Mensagem a ser processada
+ */
+async function applyThrottling(message) {
+  // Aguardar se outra mensagem estiver em processamento
+  while (processingLock) {
+    logger.debug(`[messageWorker] Aguardando lock de processamento para mensagem ${message._id}`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  // Adquirir lock
+  processingLock = true;
+  
+  try {
+    // Buscar instância e suas configurações de throttling se o ID da instância estiver disponível
+    let delay = 3000; // Delay padrão (3 segundos)
+    let instance = null;
+    
+    if (message.instanceId) {
+      instance = await Instance.findById(message.instanceId);
+      if (instance && instance.throttling) {
+        // Usar batchDelay como tempo mínimo entre mensagens individuais
+        delay = instance.throttling.batchDelay / instance.throttling.perBatch || 3000;
+        logger.debug(`[messageWorker] Usando delay de ${delay}ms baseado nas configurações da instância ${instance.instanceName}`);
+        
+        // Verificar se está em período de "quiet hours" (horas de silêncio)
+        if (instance.throttling.quietHoursEnabled) {
+          const currentHour = new Date().getHours();
+          const startHour = instance.throttling.quietHoursStart || 22;
+          const endHour = instance.throttling.quietHoursEnd || 8;
+          
+          // Verificar se a hora atual está no período de silêncio
+          const isInQuietHours = (startHour > endHour) 
+            ? (currentHour >= startHour || currentHour < endHour) // período atravessa meia-noite
+            : (currentHour >= startHour && currentHour < endHour); // período normal
+          
+          if (isInQuietHours) {
+            const waitUntil = new Date();
+            if (currentHour >= startHour) {
+              // Configurar para o final do período de silêncio no dia seguinte
+              waitUntil.setDate(waitUntil.getDate() + 1);
+              waitUntil.setHours(endHour, 0, 0, 0);
+            } else {
+              // Configurar para o final do período de silêncio hoje
+              waitUntil.setHours(endHour, 0, 0, 0);
+            }
+            
+            const waitTimeMs = waitUntil.getTime() - Date.now();
+            
+            logger.info(`[messageWorker] Período de silêncio detectado (${startHour}h-${endHour}h). Mensagem ${message._id} será processada após ${Math.round(waitTimeMs/60000)} minutos`);
+            
+            // Reagendar a mensagem para depois do período de silêncio
+            await Message.findByIdAndUpdate(message._id, {
+              status: 'scheduled_retry',
+              scheduledRetryAt: waitUntil
+            });
+            
+            // Enfileirar para retry após o período de silêncio
+            await queueService.enqueueRetry(message, waitTimeMs);
+            
+            // Liberar o lock e encerrar o processamento atual
+            processingLock = false;
+            return false;
+          }
+        }
+        
+        // Verificar se está em período de cooldown (descanso após muitos envios)
+        if (instance.throttling.cooldownEnabled) {
+          const threshold = instance.throttling.cooldownThreshold || 50;
+          const cooldownTime = instance.throttling.cooldownTime || 3600000; // 1 hora
+          
+          // Verificar quantas mensagens foram enviadas na última hora
+          const oneHourAgo = new Date(Date.now() - 3600000);
+          const recentMessageCount = await Message.countDocuments({
+            instanceId: instance._id,
+            status: 'sent',
+            sentAt: { $gte: oneHourAgo }
+          });
+          
+          if (recentMessageCount >= threshold) {
+            logger.info(`[messageWorker] Limite de cooldown atingido (${recentMessageCount}/${threshold}). Ativando período de descanso de ${cooldownTime/60000} minutos para instância ${instance.instanceName}`);
+            
+            // Reagendar a mensagem para depois do período de cooldown
+            const cooldownEnd = new Date(Date.now() + cooldownTime);
+            
+            await Message.findByIdAndUpdate(message._id, {
+              status: 'scheduled_retry',
+              scheduledRetryAt: cooldownEnd
+            });
+            
+            // Enfileirar para retry após o período de cooldown
+            await queueService.enqueueRetry(message, cooldownTime);
+            
+            // Liberar o lock e encerrar o processamento atual
+            processingLock = false;
+            return false;
+          } else {
+            logger.debug(`[messageWorker] Contagem de cooldown: ${recentMessageCount}/${threshold}`);
+          }
+        }
+        
+        // Verificar limite diário se configurado
+        if (instance.throttling.dailyLimit) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          const tomorrow = new Date(today);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          
+          // Contar mensagens enviadas hoje para esta instância
+          const dailySentCount = await Message.countDocuments({
+            instanceId: instance._id,
+            status: 'sent',
+            sentAt: { $gte: today, $lt: tomorrow }
+          });
+          
+          if (dailySentCount >= instance.throttling.dailyLimit) {
+            logger.warn(`[messageWorker] Limite diário de ${instance.throttling.dailyLimit} mensagens atingido para instância ${instance.instanceName}`);
+            
+            // Reagendar para o dia seguinte
+            const tomorrowStart = new Date(tomorrow.getTime() + 8 * 3600000); // 8h da manhã do dia seguinte
+            
+            await Message.findByIdAndUpdate(message._id, {
+              status: 'scheduled_retry',
+              scheduledRetryAt: tomorrowStart,
+              errorDetails: `Limite diário de ${instance.throttling.dailyLimit} mensagens atingido`
+            });
+            
+            // Calcular o delay até amanhã
+            const delayUntilTomorrow = tomorrowStart.getTime() - Date.now();
+            
+            // Enfileirar para retry no dia seguinte
+            await queueService.enqueueRetry(message, delayUntilTomorrow);
+            
+            // Liberar o lock e encerrar o processamento atual
+            processingLock = false;
+            return false;
+          }
+          
+          logger.debug(`[messageWorker] Contagem diária: ${dailySentCount}/${instance.throttling.dailyLimit}`);
+        }
+        
+        // Aplicar variação aleatória ao delay se configurado
+        if (instance.throttling.randomizeDelay) {
+          const minVar = instance.throttling.minDelayVariation || 0.8;
+          const maxVar = instance.throttling.maxDelayVariation || 1.2;
+          const variation = minVar + Math.random() * (maxVar - minVar);
+          const originalDelay = delay;
+          delay = Math.floor(delay * variation);
+          
+          logger.debug(`[messageWorker] Aplicando variação aleatória ao delay: ${originalDelay}ms -> ${delay}ms (${Math.round(variation * 100)}%)`);
+        }
+      }
+    }
+    
+    // Calcular quanto tempo esperar baseado na última mensagem processada
+    const now = Date.now();
+    const elapsed = now - lastMessageProcessedTime;
+    
+    if (elapsed < delay) {
+      const waitTime = delay - elapsed;
+      logger.info(`[messageWorker] Throttling: aguardando ${waitTime}ms antes de processar a mensagem ${message._id}`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    // Atualizar timestamp da última mensagem processada
+    lastMessageProcessedTime = Date.now();
+    
+    // Tudo ok para prosseguir
+    return true;
+  } catch (error) {
+    logger.error(`[messageWorker] Erro ao aplicar throttling:`, error);
+    // Continue mesmo com erro no throttling
+    return true;
   }
 }
 

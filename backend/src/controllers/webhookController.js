@@ -78,37 +78,46 @@ const processWebhookEvent = async (instanceName, event, data) => {
     // Processar diferentes tipos de eventos
     switch (event) {
       case 'CONNECTION_UPDATE':
+      case 'connection.update':
         await handleConnectionUpdate(instanceName, data);
         break;
         
       case 'QRCODE_UPDATED':
+      case 'qrcode.update':
         await handleQrCodeUpdated(instanceName, data);
         break;
         
       case 'MESSAGES_UPSERT':
+      case 'messages.upsert':
         await handleMessagesUpsert(instanceName, data);
         break;
         
       case 'MESSAGES_UPDATE':
+      case 'messages.update':
         await handleMessagesUpdate(instanceName, data);
         break;
         
       case 'MESSAGES_DELETE':
+      case 'messages.delete':
         await handleMessagesDelete(instanceName, data);
         break;
         
       case 'SEND_MESSAGE':
+      case 'send.message':
         await handleSendMessage(instanceName, data);
         break;
         
       case 'PRESENCE_UPDATE':
+      case 'presence.update':
         await handlePresenceUpdate(instanceName, data);
         break;
 
+      case 'CHATS_UPDATE':
       case 'chats.update':
         await handleChatsUpdate(instanceName, data);
         break;
 
+      case 'CONTACTS_UPDATE':
       case 'contacts.update':
         await handleContactsUpdate(instanceName, data);
         break;
@@ -386,7 +395,7 @@ const handleContactsUpdate = async (instanceName, data) => {
   try {
     if (!data.contacts || !Array.isArray(data.contacts)) {
       logger.warn('Evento contacts.update recebido sem contatos válidos');
-      return;
+        return;
     }
     
     logger.info(`Processando ${data.contacts.length} atualizações de contatos para instância ${instanceName}`);
@@ -588,4 +597,4 @@ exports.clearQueue = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-};
+}; 

@@ -116,17 +116,31 @@ const instanceSchema = new mongoose.Schema({
     },
     perBatch: {
       type: Number,
-      default: 50,
+      default: 20,
       min: 1,
       max: 500,
       description: 'Número máximo de mensagens por lote'
     },
     batchDelay: {
       type: Number,
-      default: 5000,
+      default: 10000,
       min: 1000,
       max: 60000,
       description: 'Intervalo entre lotes em milissegundos'
+    },
+    mediaDelayMultiplier: {
+      type: Number,
+      default: 2.5,
+      min: 1,
+      max: 5,
+      description: 'Multiplicador de delay para mensagens de mídia'
+    },
+    dailyLimit: {
+      type: Number,
+      default: 200,
+      min: 50,
+      max: 1000,
+      description: 'Limite diário de mensagens para evitar bloqueio'
     },
     retryDelay: {
       type: Number,
@@ -142,6 +156,68 @@ const instanceSchema = new mongoose.Schema({
       max: 10,
       description: 'Número máximo de tentativas para mensagens com falha'
     },
+    randomizeDelay: {
+      type: Boolean,
+      default: true,
+      description: 'Ativar variação aleatória nos delays para comportamento mais natural'
+    },
+    minDelayVariation: {
+      type: Number, 
+      default: 0.8,
+      min: 0.5,
+      max: 1.0,
+      description: 'Percentual mínimo de variação do delay (0.8 = 80%)'
+    },
+    maxDelayVariation: {
+      type: Number,
+      default: 1.2,
+      min: 1.0,
+      max: 2.0,
+      description: 'Percentual máximo de variação do delay (1.2 = 120%)'
+    },
+    hourlyDistribution: {
+      type: Boolean,
+      default: true,
+      description: 'Distribuir mensagens ao longo do dia de forma mais natural'
+    },
+    quietHoursEnabled: {
+      type: Boolean,
+      default: true,
+      description: 'Evitar envio de mensagens em horários sensíveis'
+    },
+    quietHoursStart: {
+      type: Number,
+      default: 22, // 22h (10PM)
+      min: 0,
+      max: 23,
+      description: 'Hora de início do período de silêncio (formato 24h)'
+    },
+    quietHoursEnd: {
+      type: Number,
+      default: 8, // 8h (8AM)
+      min: 0,
+      max: 23,
+      description: 'Hora de término do período de silêncio (formato 24h)'
+    },
+    cooldownEnabled: {
+      type: Boolean,
+      default: true,
+      description: 'Ativar período de descanso após muitos envios'
+    },
+    cooldownThreshold: {
+      type: Number,
+      default: 50,
+      min: 10,
+      max: 200,
+      description: 'Quantidade de mensagens antes de entrar em período de descanso'
+    },
+    cooldownTime: {
+      type: Number,
+      default: 3600000, // 1 hora em ms
+      min: 600000,
+      max: 14400000,
+      description: 'Tempo de descanso após atingir o limite (em ms)'
+    }
   },
   metrics: {
     totalSent: {

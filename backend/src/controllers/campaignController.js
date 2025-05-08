@@ -465,7 +465,73 @@ const verificarContatos = async (req, res, next) => {
   }
 };
 
-// Iniciar campanha
+// Função para criar batches de campanha
+const createCampaignBatches = async (campaign, contacts, instance, template) => {
+  try {
+    logger.info(`Criando batches para campanha ${campaign._id} com ${contacts.length} contatos`);
+    
+    // Determinar tamanho seguro do batch baseado nas configurações da instância
+    // Se o usuário forneceu um segmentSize, usamos ele, senão usamos um valor baseado na instância
+    const segmentSize = campaign.segmentSize || Math.min(100, instance.throttling?.perBatch || 100);
+    
+    // Calcular quantos batches precisamos
+    const totalBatches = Math.ceil(contacts.length / segmentSize);
+    
+    logger.info(`Dividindo campanha em ${totalBatches} batches de aproximadamente ${segmentSize} contatos cada`);
+    
+    // Se for apenas 1 batch, não precisamos fazer nada especial
+    if (totalBatches <= 1) {
+      logger.info(`Campanha tem apenas ${contacts.length} contatos, não é necessário dividir em batches`);
+      return {
+        needsBatching: false,
+        batches: []
+      };
+    }
+    
+    // Dividir os contatos em batches
+    const batches = [];
+    for (let i = 0; i < totalBatches; i++) {
+      const batchContacts = contacts.slice(i * segmentSize, (i + 1) * segmentSize);
+      
+      // Calcular horário de envio para cada batch
+      // Primeiro batch começa imediatamente (ou no horário agendado)
+      const startAt = new Date();
+      if (campaign.schedule && campaign.schedule.startAt) {
+        // Se a campanha for agendada, usamos esse horário como base
+        startAt.setTime(new Date(campaign.schedule.startAt).getTime());
+      }
+      
+      // Adicionar um intervalo entre batches (2 horas por padrão, ou o configurado)
+      const batchInterval = campaign.batchInterval || (2 * 60 * 60 * 1000); // 2 horas em ms
+      startAt.setTime(startAt.getTime() + (i * batchInterval));
+      
+      // Criar um "sub-campanha" para cada batch
+      const batchName = `${campaign.name} - Batch ${i+1}/${totalBatches}`;
+      
+      batches.push({
+        batchNumber: i + 1,
+        totalBatches,
+        batchName,
+        contactCount: batchContacts.length,
+        contactIds: batchContacts.map(c => c._id),
+        startAt,
+        parentCampaignId: campaign._id
+      });
+      
+      logger.info(`Batch ${i+1}/${totalBatches} criado com ${batchContacts.length} contatos, agendado para ${startAt.toISOString()}`);
+    }
+    
+    return {
+      needsBatching: true,
+      batches
+    };
+  } catch (error) {
+    logger.error(`Erro ao criar batches de campanha: ${error.message}`, error);
+    throw error;
+  }
+};
+
+// Modificar a função startCampaign para usar o sistema de batches
 exports.startCampaign = async (req, res) => {
   try {
     const campaign = await Campaign.findById(req.params.id);
@@ -566,6 +632,87 @@ exports.startCampaign = async (req, res) => {
       });
     }
     
+    // Verificar se é necessário dividir a campanha em batches
+    // Considerar grandes campanhas aquelas com mais contatos do que o limite seguro
+    const useBatchMode = req.body.useBatchMode || contacts.length > 200; // Limite configurável
+    
+    if (useBatchMode) {
+      logger.info(`Campanha com ${contacts.length} contatos, usando modo de batches`);
+      
+      // Criar batches de campanha
+      const batchesResult = await createCampaignBatches(campaign, contacts, instance, template);
+      
+      if (batchesResult.needsBatching) {
+        // Se é necessário criar batches, criar "sub-campanhas" para cada batch
+        const batches = batchesResult.batches;
+        
+        // Lista de IDs das sub-campanhas criadas
+        const batchCampaignIds = [];
+        
+        // Criar uma nova campanha para cada batch
+        for (const batch of batches) {
+          const batchCampaign = new Campaign({
+            name: batch.batchName,
+            templateId: campaign.templateId,
+            contacts: batch.contactIds,
+            instanceId: campaign.instanceId,
+            variableValues: campaign.variableValues,
+            schedule: {
+              type: 'scheduled',
+              startAt: batch.startAt
+            },
+            isSubCampaign: true,
+            parentCampaignId: campaign._id,
+            batchNumber: batch.batchNumber,
+            totalBatches: batch.totalBatches,
+            metrics: {
+              total: batch.contactCount,
+              pending: batch.contactCount,
+              sent: 0,
+              delivered: 0,
+              read: 0,
+              failed: 0
+            }
+          });
+          
+          // Salvar a sub-campanha
+          const savedBatch = await batchCampaign.save();
+          batchCampaignIds.push(savedBatch._id);
+          
+          logger.info(`Sub-campanha criada: ${savedBatch._id} para batch ${batch.batchNumber}/${batch.totalBatches}`);
+        }
+        
+        // Atualizar a campanha principal como "master"
+        await Campaign.findByIdAndUpdate(
+          campaign._id,
+          {
+            status: 'master',
+            'metrics.total': contacts.length,
+            'metrics.pending': contacts.length,
+            batchMode: true,
+            batchCampaigns: batchCampaignIds,
+            batchSize: batches[0].contactCount,
+            totalBatches: batches.length,
+            lastUpdated: Date.now()
+          }
+        );
+        
+        // Retornar sucesso com informações sobre os batches
+        return res.status(200).json({
+          success: true,
+          message: 'Campanha dividida em batches para envio seguro',
+          data: {
+            totalMessages: contacts.length,
+            batches: batches.length,
+            batchSize: batches[0].contactCount,
+            firstBatchTime: batches[0].startAt,
+            lastBatchTime: batches[batches.length - 1].startAt
+          }
+        });
+      }
+    }
+    
+    // Continuar com o fluxo normal se não precisar de batches ou se a configuração desabilitar
     logger.info(`Criando ${contacts.length} mensagens para a campanha ${campaign.name}`);
     console.log(`Criando ${contacts.length} mensagens para a campanha ${campaign.name}`);
     
